@@ -1,0 +1,33 @@
+version: "3.1"
+
+services:
+  eventstore:
+    image: eventstore/eventstore:latest
+    container_name: eventstore
+    ports:
+      - "2113:2113"
+      - "1113:1113"
+    volumes:
+      - ./data/eventstore:/var/lib/eventstore
+    environment:
+      # - EVENTSTORE_RUN_PROJECTIONS=All
+      # - EVENTSTORE_START_STANDARD_PROJECTIONS=True
+      - EVENTSTORE_INSECURE=True
+      - EVENTSTORE_ENABLE_ATOM_PUB_OVER_HTTP=True
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: meilisearch
+    ports:
+      - "7700:7700"
+    volumes:
+      - "./data/meilisearch:/meili_data"
+  # db:
+  #   image: postgres
+  #   restart: always
+  #   environment:
+  #     POSTGRES_PASSWORD: TakamiChika0721
+  # adminer:
+  #   image: adminer
+  #   restart: always
+  #   ports:
+  #     - 8081:8080
