@@ -1,9 +1,13 @@
-use super::MediaId;
-use crate::domain::{DataAccessError, Entity, Event, EventQueue, EventQueueIntoIter, Id};
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use derive_more::{Deref, Display, Error, From, IntoIterator};
 use serde::{Deserialize, Serialize};
-use std::{error::Error, fmt, ops::Deref};
+
+use crate::domain::{Aggregation, DataAccessError, Entity, Event, EventQueue, Id};
+
+use super::MediaId;
 
 #[async_trait]
 pub trait ProstituteRepository {
@@ -12,36 +16,18 @@ pub trait ProstituteRepository {
     async fn delete(&mut self, entity: &mut Prostitute) -> Result<bool, DataAccessError>;
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display, From, Deref, Default,
+)]
 pub struct ProstituteId(u64);
 
 impl Id for ProstituteId {
     type Inner = u64;
 }
 
-impl fmt::Display for ProstituteId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Deref for ProstituteId {
-    type Target = u64;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<u64> for ProstituteId {
-    fn from(value: u64) -> Self {
-        Self(value)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProstituteEvent {
-    Joined {
+    ProstituteJoined {
         id: ProstituteId,
         name: String,
         catchphrase: String,
@@ -54,10 +40,10 @@ pub enum ProstituteEvent {
         images: Vec<MediaId>,
         video: Option<MediaId>,
     },
-    Rejoined {
+    ProstituteRejoined {
         id: ProstituteId,
     },
-    Leaved {
+    ProstituteLeaved {
         id: ProstituteId,
     },
     NameChanged {
@@ -96,35 +82,38 @@ pub enum ProstituteEvent {
         id: ProstituteId,
         question: Question,
     },
-    QuestionRemoved {
+    QuestionDeleted {
         id: ProstituteId,
         index: usize,
     },
-    QuestionOrderChanged {
+    QuestionSwapped {
         id: ProstituteId,
         index_a: usize,
         index_b: usize,
     },
     ImagesChanged {
         id: ProstituteId,
-        images: Vec<MediaId>,
+        media_ids: Vec<MediaId>,
     },
     ImageAdded {
         id: ProstituteId,
-        image: MediaId,
+        media_id: MediaId,
     },
-    ImageRemoved {
+    ImageDeleted {
         id: ProstituteId,
-        image: MediaId,
+        media_id: MediaId,
     },
-    ImageOrderChanged {
+    ImageSwapped {
         id: ProstituteId,
-        image_a: MediaId,
-        image_b: MediaId,
+        media_id_a: MediaId,
+        media_id_b: MediaId,
     },
     VideoChanged {
         id: ProstituteId,
-        video: Option<MediaId>,
+        media_id: Option<MediaId>,
+    },
+    ProstituteDeleted {
+        id: ProstituteId,
     },
 }
 
@@ -132,7 +121,7 @@ impl Event for ProstituteEvent {
     type Id = ProstituteId;
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, IntoIterator, Serialize, Deserialize)]
 pub struct Prostitute {
     id: ProstituteId,
     name: String,
@@ -146,7 +135,8 @@ pub struct Prostitute {
     images: Vec<MediaId>,
     video: Option<MediaId>,
     leaved: bool,
-
+    #[serde(skip)]
+    #[into_iterator]
     events: EventQueue<ProstituteEvent>,
 }
 
@@ -164,8 +154,22 @@ impl Prostitute {
         images: Vec<MediaId>,
         video: Option<MediaId>,
     ) -> Result<Self, ProstituteError> {
-        let mut entity = Prostitute::default();
-        let event = ProstituteEvent::Joined {
+        Self::validate_created(&name, &catchphrase, &images)?;
+        let mut entity = Prostitute {
+            id,
+            name: name.clone(),
+            catchphrase: catchphrase.clone(),
+            profile: profile.clone(),
+            message: message.clone(),
+            figure: figure.clone(),
+            blood,
+            birthday: birthday.clone(),
+            questions: questions.clone(),
+            images: images.clone(),
+            video,
+            ..Default::default()
+        };
+        entity.events.push(ProstituteEvent::ProstituteJoined {
             id,
             name,
             catchphrase,
@@ -177,195 +181,363 @@ impl Prostitute {
             questions,
             images,
             video,
-        };
-        entity.validate(&event)?;
-        entity.apply(event);
+        });
         Ok(entity)
     }
 
+    pub fn rejoin(&mut self) -> Result<(), ProstituteError> {
+        self.validate_rejoined()?;
+        self.leaved = false;
+        self.events
+            .push(ProstituteEvent::ProstituteLeaved { id: self.id });
+        Ok(())
+    }
+
+    pub fn leave(&mut self) -> Result<(), ProstituteError> {
+        self.validate_leaved()?;
+        self.leaved = true;
+        self.events
+            .push(ProstituteEvent::ProstituteLeaved { id: self.id });
+        Ok(())
+    }
+
     pub fn change_name(&mut self, name: String) -> Result<(), ProstituteError> {
-        let event = ProstituteEvent::NameChanged { id: self.id, name };
-        self.validate(&event)?;
-        self.apply(event);
+        Self::validate_name(&name)?;
+        self.name = name.clone();
+        self.events
+            .push(ProstituteEvent::NameChanged { id: self.id, name });
         Ok(())
     }
 
     pub fn change_catchphrase(&mut self, catchphrase: String) -> Result<(), ProstituteError> {
-        let event = ProstituteEvent::CatchphraseChanged {
+        Self::validate_catchphrase(&catchphrase)?;
+        self.catchphrase = catchphrase.clone();
+        self.events.push(ProstituteEvent::CatchphraseChanged {
             id: self.id,
             catchphrase,
-        };
-        self.validate(&event)?;
-        self.apply(event);
+        });
         Ok(())
     }
 
     pub fn change_profile(&mut self, profile: String) {
-        let event = ProstituteEvent::ProfileChanged {
+        self.profile = profile.clone();
+        self.events.push(ProstituteEvent::ProfileChanged {
             id: self.id,
             profile,
-        };
-        self.apply(event);
+        })
     }
 
     pub fn change_message(&mut self, message: String) {
-        let event = ProstituteEvent::MessageChanged {
+        self.message = message.clone();
+        self.events.push(ProstituteEvent::MessageChanged {
             id: self.id,
             message,
-        };
-        self.apply(event);
+        })
     }
 
     pub fn change_figure(&mut self, figure: Figure) {
-        let event = ProstituteEvent::FigureChanged {
+        self.figure = figure.clone();
+        self.events.push(ProstituteEvent::FigureChanged {
             id: self.id,
             figure,
-        };
-        self.apply(event);
+        })
     }
 
     pub fn change_blood_type(&mut self, blood: Option<BloodType>) {
-        let event = ProstituteEvent::BloodTypeChanged { id: self.id, blood };
-        self.apply(event);
+        self.blood = blood;
+        self.events
+            .push(ProstituteEvent::BloodTypeChanged { id: self.id, blood })
     }
 
     pub fn change_birthday(&mut self, birthday: Option<Birthday>) {
-        let event = ProstituteEvent::BirthdayChanged {
+        self.birthday = birthday.clone();
+        self.events.push(ProstituteEvent::BirthdayChanged {
             id: self.id,
             birthday,
-        };
-        self.apply(event);
-    }
-
-    pub fn add_question(&mut self, question: Question) {
-        let event = ProstituteEvent::QuestionAdded {
-            id: self.id,
-            question,
-        };
-        self.apply(event);
-    }
-
-    pub fn remove_question(&mut self, index: usize) -> Result<(), ProstituteError> {
-        let event = ProstituteEvent::QuestionRemoved { id: self.id, index };
-        self.validate(&event)?;
-        self.apply(event);
-        Ok(())
-    }
-
-    pub fn change_question_order(
-        &mut self,
-        index_a: usize,
-        index_b: usize,
-    ) -> Result<(), ProstituteError> {
-        let event = ProstituteEvent::QuestionOrderChanged {
-            id: self.id,
-            index_a,
-            index_b,
-        };
-        self.validate(&event)?;
-        self.apply(event);
-        Ok(())
+        })
     }
 
     pub fn change_questions(&mut self, questions: Vec<Question>) {
-        let event = ProstituteEvent::QuestionsChanged {
+        self.questions = questions.clone();
+        self.events.push(ProstituteEvent::QuestionsChanged {
             id: self.id,
             questions,
-        };
-        self.apply(event);
+        })
     }
 
-    pub fn change_images(&mut self, images: Vec<MediaId>) {
-        let event = ProstituteEvent::ImagesChanged {
+    pub fn add_question(&mut self, question: Question) {
+        self.questions.push(question.clone());
+        self.events.push(ProstituteEvent::QuestionAdded {
             id: self.id,
-            images,
-        };
-        self.apply(event);
+            question,
+        })
+    }
+
+    pub fn delete_question(&mut self, index: usize) -> Result<(), ProstituteError> {
+        self.validate_question_delete(&index)?;
+        self.questions.remove(index);
+        self.events
+            .push(ProstituteEvent::QuestionDeleted { id: self.id, index });
+        Ok(())
+    }
+
+    pub fn swap_question(&mut self, index_a: usize, index_b: usize) -> Result<(), ProstituteError> {
+        self.validate_question_swapped(&index_a, &index_b)?;
+        self.questions.swap(index_a, index_b);
+        self.events.push(ProstituteEvent::QuestionSwapped {
+            id: self.id,
+            index_a,
+            index_b,
+        });
+        Ok(())
+    }
+
+    pub fn change_images(&mut self, media_ids: Vec<MediaId>) {
+        self.images = media_ids.clone();
+        self.events.push(ProstituteEvent::ImagesChanged {
+            id: self.id,
+            media_ids,
+        });
+    }
+
+    pub fn add_image(&mut self, media_id: MediaId) -> Result<(), ProstituteError> {
+        self.validate_image_added(&media_id)?;
+        self.images.push(media_id);
+        self.events.push(ProstituteEvent::ImageAdded {
+            id: self.id,
+            media_id,
+        });
+        Ok(())
+    }
+
+    pub fn delete_image(&mut self, media_id: MediaId) -> Result<(), ProstituteError> {
+        self.validate_image_deleted(&media_id)?;
+        self.images.retain(|&m| m != media_id);
+        self.events.push(ProstituteEvent::ImageDeleted {
+            id: self.id,
+            media_id,
+        });
+        Ok(())
+    }
+
+    pub fn swap_image(
+        &mut self,
+        media_id_a: MediaId,
+        media_id_b: MediaId,
+    ) -> Result<(), ProstituteError> {
+        self.validate_image_swapped(&media_id_a, &media_id_b)?;
+        self.images.iter_mut().for_each(|x| {
+            if *x == media_id_a {
+                *x = media_id_b
+            } else if *x == media_id_b {
+                *x = media_id_a
+            }
+        });
+        self.events.push(ProstituteEvent::ImageSwapped {
+            id: self.id,
+            media_id_a,
+            media_id_b,
+        });
+        Ok(())
     }
 
     pub fn change_video(&mut self, video: Option<MediaId>) {
-        let event = ProstituteEvent::VideoChanged { id: self.id, video };
+        let event = ProstituteEvent::VideoChanged {
+            id: self.id,
+            media_id: video,
+        };
         self.apply(event);
         self.video = video;
+    }
+
+    fn validate_id(&self, id: &ProstituteId) -> Result<(), ProstituteError> {
+        match self.id == *id {
+            true => Ok(()),
+            false => Err(ProstituteError::MismatchedId),
+        }
+    }
+
+    fn validate_created(
+        name: &String,
+        catchphrase: &String,
+        images: &Vec<MediaId>,
+    ) -> Result<(), ProstituteError> {
+        Self::validate_name(name)?;
+        Self::validate_catchphrase(catchphrase)?;
+        let new_images: HashSet<_> = HashSet::from_iter(images);
+        match images.len() == new_images.len() {
+            true => Ok(()),
+            false => Err(ProstituteError::DuplicateImage),
+        }
+    }
+
+    fn validate_rejoined(&self) -> Result<(), ProstituteError> {
+        match self.leaved {
+            true => Err(ProstituteError::AlreadyLeft),
+            false => Ok(()),
+        }
+    }
+
+    fn validate_leaved(&self) -> Result<(), ProstituteError> {
+        match self.leaved {
+            true => Ok(()),
+            false => Err(ProstituteError::AlreadyJoined),
+        }
+    }
+
+    fn validate_name(name: &str) -> Result<(), ProstituteError> {
+        match name.trim().is_empty() {
+            true => Err(ProstituteError::NameIsBlank),
+            false => Ok(()),
+        }
+    }
+
+    fn validate_catchphrase(catchphrase: &str) -> Result<(), ProstituteError> {
+        match catchphrase.trim().is_empty() {
+            true => Err(ProstituteError::CatchphraseIsBlank),
+            false => Ok(()),
+        }
+    }
+
+    fn validate_question_delete(&self, index: &usize) -> Result<(), ProstituteError> {
+        self.validate_question_not_found(index)
+    }
+
+    fn validate_question_swapped(
+        &self,
+        index_a: &usize,
+        index_b: &usize,
+    ) -> Result<(), ProstituteError> {
+        self.validate_question_not_found(index_a)?;
+        self.validate_question_not_found(index_b)?;
+        match *index_a == *index_b {
+            true => Err(ProstituteError::DuplicateQuestionIndex),
+            false => Ok(()),
+        }
+    }
+
+    fn validate_image_added(&self, media_id: &MediaId) -> Result<(), ProstituteError> {
+        match self.images.iter().find(|&&id| id == *media_id) {
+            Some(_) => Err(ProstituteError::DuplicateImage),
+            None => Ok(()),
+        }
+    }
+
+    fn validate_image_deleted(&self, media_id: &MediaId) -> Result<(), ProstituteError> {
+        self.validate_image_not_found(media_id)
+    }
+
+    fn validate_image_swapped(
+        &self,
+        media_id_a: &MediaId,
+        media_id_b: &MediaId,
+    ) -> Result<(), ProstituteError> {
+        self.validate_image_not_found(media_id_a)?;
+        self.validate_image_not_found(media_id_b)?;
+        match *media_id_a == *media_id_b {
+            true => Err(ProstituteError::DuplicateImageIndex),
+            false => Ok(()),
+        }
+    }
+
+    fn validate_question_not_found(&self, index: &usize) -> Result<(), ProstituteError> {
+        if *index >= self.questions.len() {
+            Err(ProstituteError::QuestionNotFound)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_image_not_found(&self, media_id: &MediaId) -> Result<(), ProstituteError> {
+        match self.images.iter().find(|&&id| id == *media_id) {
+            Some(_) => Ok(()),
+            None => Err(ProstituteError::ImageNotFound),
+        }
     }
 }
 
 impl Entity for Prostitute {
     type Id = ProstituteId;
-    type Event = ProstituteEvent;
-    type Error = ProstituteError;
+
+    const ENTITY_NAME: &'static str = "prostitute";
 
     fn id(&self) -> Self::Id {
         self.id
     }
+}
+
+impl Aggregation for Prostitute {
+    type Event = ProstituteEvent;
+    type Error = ProstituteError;
 
     fn validate(&self, event: &Self::Event) -> Result<(), Self::Error> {
-        let validate_name = |name: &str| {
-            if name.trim().is_empty() {
-                Err(ProstituteError::NameIsEmpty)
-            } else {
-                Ok(())
-            }
-        };
-        let validate_catchphrase = |catchphrase: &str| {
-            if catchphrase.trim().is_empty() {
-                Err(ProstituteError::CatchphraseIsEmpty)
-            } else {
-                Ok(())
-            }
-        };
         match event {
-            ProstituteEvent::Joined {
-                name, catchphrase, ..
+            ProstituteEvent::ProstituteJoined {
+                name,
+                catchphrase,
+                images,
+                ..
+            } => Self::validate_created(name, catchphrase, images),
+            ProstituteEvent::ProstituteRejoined { id } => {
+                self.validate_id(id)?;
+                self.validate_rejoined()
+            }
+            ProstituteEvent::ProstituteLeaved { id } => {
+                self.validate_id(id)?;
+                self.validate_leaved()
+            }
+            ProstituteEvent::NameChanged { id, name } => {
+                self.validate_id(id)?;
+                Self::validate_name(name)
+            }
+            ProstituteEvent::CatchphraseChanged { id, catchphrase } => {
+                self.validate_id(id)?;
+                Self::validate_catchphrase(catchphrase)
+            }
+            ProstituteEvent::ProfileChanged { id, .. }
+            | ProstituteEvent::MessageChanged { id, .. }
+            | ProstituteEvent::FigureChanged { id, .. }
+            | ProstituteEvent::BloodTypeChanged { id, .. }
+            | ProstituteEvent::BirthdayChanged { id, .. }
+            | ProstituteEvent::QuestionsChanged { id, .. }
+            | ProstituteEvent::QuestionAdded { id, .. } => self.validate_id(id),
+            ProstituteEvent::QuestionDeleted { id, index } => {
+                self.validate_id(id)?;
+                self.validate_question_delete(index)
+            }
+            ProstituteEvent::QuestionSwapped {
+                id,
+                index_a,
+                index_b,
             } => {
-                validate_name(name)?;
-                validate_catchphrase(catchphrase)
+                self.validate_id(id)?;
+                self.validate_question_swapped(index_a, index_b)
             }
-            ProstituteEvent::Rejoined { .. } => Ok(()),
-            ProstituteEvent::Leaved { .. } => Ok(()),
-            ProstituteEvent::NameChanged { name, .. } => validate_name(name),
-            ProstituteEvent::CatchphraseChanged { catchphrase, .. } => {
-                validate_catchphrase(catchphrase)
+            ProstituteEvent::ImagesChanged { id, .. } => self.validate_id(id),
+            ProstituteEvent::ImageAdded { id, media_id } => {
+                self.validate_id(id)?;
+                self.validate_image_added(media_id)
             }
-            ProstituteEvent::ProfileChanged { .. } => Ok(()),
-            ProstituteEvent::MessageChanged { .. } => Ok(()),
-            ProstituteEvent::FigureChanged { .. } => Ok(()),
-            ProstituteEvent::BloodTypeChanged { .. } => Ok(()),
-            ProstituteEvent::BirthdayChanged { .. } => Ok(()),
-            ProstituteEvent::QuestionsChanged { .. } => Ok(()),
-            ProstituteEvent::QuestionAdded { .. } => Ok(()),
-            ProstituteEvent::QuestionRemoved { index, .. } => {
-                if index >= &self.questions.len() {
-                    Err(ProstituteError::QuestionIsNotExists)
-                } else {
-                    Ok(())
-                }
+            ProstituteEvent::ImageDeleted { id, media_id } => {
+                self.validate_id(id)?;
+                self.validate_image_deleted(media_id)
             }
-            ProstituteEvent::QuestionOrderChanged {
-                index_a, index_b, ..
+            ProstituteEvent::ImageSwapped {
+                id,
+                media_id_a,
+                media_id_b,
             } => {
-                if index_a >= &self.questions.len() {
-                    Err(ProstituteError::QuestionIsNotExists)
-                } else if index_b >= &self.questions.len() {
-                    Err(ProstituteError::QuestionIsNotExists)
-                } else {
-                    Ok(())
-                }
+                self.validate_id(id)?;
+                self.validate_image_swapped(media_id_a, media_id_b)
             }
-            ProstituteEvent::ImagesChanged { .. } => Ok(()),
-            ProstituteEvent::ImageAdded { .. } => Ok(()),
-            ProstituteEvent::ImageRemoved { .. } => Ok(()),
-            ProstituteEvent::ImageOrderChanged { .. } => Ok(()),
-            ProstituteEvent::VideoChanged { .. } => Ok(()),
+            ProstituteEvent::VideoChanged { id, .. }
+            | ProstituteEvent::ProstituteDeleted { id, .. } => self.validate_id(id),
         }
     }
 
     fn apply(&mut self, event: Self::Event) {
-        if let Err(_) = self.validate(&event) {
-            return;
-        }
-        match event.clone() {
-            ProstituteEvent::Joined {
+        match event {
+            ProstituteEvent::ProstituteJoined {
                 id,
                 name,
                 catchphrase,
@@ -379,160 +551,123 @@ impl Entity for Prostitute {
                 video,
             } => {
                 if self.id == id {
-                    return;
+                    if let Ok(entity) = Self::join(
+                        id,
+                        name,
+                        catchphrase,
+                        profile,
+                        message,
+                        figure,
+                        blood,
+                        birthday,
+                        questions,
+                        images,
+                        video,
+                    ) {
+                        *self = entity;
+                    }
                 }
-                self.id = id;
-                self.name = name;
-                self.catchphrase = catchphrase;
-                self.profile = profile;
-                self.message = message;
-                self.figure = figure;
-                self.blood = blood;
-                self.birthday = birthday;
-                self.questions = questions;
-                self.images = images;
-                self.video = video;
             }
-            ProstituteEvent::Rejoined { id } => {
-                if self.id != id || self.leaved {
-                    return;
+            ProstituteEvent::ProstituteRejoined { id } => {
+                if self.id == id {
+                    if let Err(_e) = self.rejoin() {}
                 }
-                self.leaved = false;
             }
-            ProstituteEvent::Leaved { id } => {
-                if self.id != id || !self.leaved {
-                    return;
+            ProstituteEvent::ProstituteLeaved { id } => {
+                if self.id == id {
+                    if let Err(_e) = self.leave() {}
                 }
-                self.leaved = true;
             }
             ProstituteEvent::NameChanged { id, name } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    if let Err(_e) = self.change_name(name) {}
                 }
-                self.name = name;
             }
             ProstituteEvent::CatchphraseChanged { id, catchphrase } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    if let Err(_e) = self.change_catchphrase(catchphrase) {}
                 }
-                self.catchphrase = catchphrase;
             }
             ProstituteEvent::ProfileChanged { id, profile } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.change_profile(profile);
                 }
-                self.profile = profile;
             }
             ProstituteEvent::MessageChanged { id, message } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.change_message(message)
                 }
-                self.message = message;
             }
             ProstituteEvent::FigureChanged { id, figure } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.change_figure(figure)
                 }
-                self.figure = figure;
             }
             ProstituteEvent::BloodTypeChanged { id, blood } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.change_blood_type(blood)
                 }
-                self.blood = blood;
             }
             ProstituteEvent::BirthdayChanged { id, birthday } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.change_birthday(birthday)
                 }
-                self.birthday = birthday;
             }
             ProstituteEvent::QuestionsChanged { id, questions } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.change_questions(questions)
                 }
-                self.questions = questions;
             }
             ProstituteEvent::QuestionAdded { id, question } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.add_question(question)
                 }
-                self.questions.push(question);
             }
-            ProstituteEvent::QuestionRemoved { id, index } => {
-                if self.id != id {
-                    return;
+            ProstituteEvent::QuestionDeleted { id, index } => {
+                if self.id == id {
+                    if let Err(_e) = self.delete_question(index) {}
                 }
-                self.questions.remove(index);
             }
-            ProstituteEvent::QuestionOrderChanged {
+            ProstituteEvent::QuestionSwapped {
                 id,
                 index_a,
                 index_b,
             } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    if let Err(_e) = self.swap_question(index_a, index_b) {}
                 }
-                self.questions.swap(index_a, index_b);
             }
-            ProstituteEvent::ImagesChanged { id, images } => {
-                if self.id != id {
-                    return;
+            ProstituteEvent::ImagesChanged { id, media_ids } => {
+                if self.id == id {
+                    self.change_images(media_ids)
                 }
-                self.images = images;
             }
-            ProstituteEvent::ImageAdded { id, image } => {
-                if self.id != id {
-                    return;
+            ProstituteEvent::ImageAdded { id, media_id } => {
+                if self.id == id {
+                    if let Err(_e) = self.add_image(media_id) {}
                 }
-                self.images.push(image)
             }
-            ProstituteEvent::ImageRemoved { id, image } => {
-                if self.id != id {
-                    return;
+            ProstituteEvent::ImageDeleted { id, media_id } => {
+                if self.id == id {
+                    if let Err(_e) = self.delete_image(media_id) {}
                 }
-                if let Some(pos) = self.images.iter().position(|x| *x == image) {
-                    self.images.remove(pos);
-                }
-                return;
             }
-            ProstituteEvent::ImageOrderChanged {
+            ProstituteEvent::ImageSwapped {
                 id,
-                image_a,
-                image_b,
+                media_id_a,
+                media_id_b,
             } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    if let Err(_e) = self.swap_image(media_id_a, media_id_b) {}
                 }
-                let swaps: Vec<_> = self
-                    .images
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, x)| {
-                        if *x == image_a || *x == image_b {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if swaps.len() == 2 {
-                    self.images.swap(swaps[0], swaps[1]);
-                }
-                return;
             }
-            ProstituteEvent::VideoChanged { id, video } => {
-                if self.id != id {
-                    return;
+            ProstituteEvent::VideoChanged { id, media_id } => {
+                if self.id == id {
+                    self.change_video(media_id)
                 }
-                self.video = video;
             }
+            ProstituteEvent::ProstituteDeleted { .. } => {}
         }
-        self.events.push(event);
-    }
-
-    fn entity_name() -> &'static str {
-        "prostitute"
     }
 
     fn events(&self) -> &EventQueue<Self::Event> {
@@ -544,40 +679,144 @@ impl Entity for Prostitute {
     }
 }
 
-impl IntoIterator for Prostitute {
-    type Item = ProstituteEvent;
-    type IntoIter = EventQueueIntoIter<Self::Item>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.events.into_iter()
+impl PartialEq for Prostitute {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.name == other.name
+            && self.catchphrase == other.catchphrase
+            && self.profile == other.profile
+            && self.message == other.message
+            && self.figure == other.figure
+            && self.blood == other.blood
+            && self.birthday == other.birthday
+            && self.questions == other.questions
+            && self.images == other.images
+            && self.video == other.video
+            && self.leaved == other.leaved
     }
 }
 
-#[derive(Debug)]
+impl Eq for Prostitute {}
+
+#[derive(Error, Display, Debug)]
 pub enum ProstituteError {
-    NameIsEmpty,
-    CatchphraseIsEmpty,
-    QuestionIsNotExists,
+    /// IDが一致しません
+    #[display(fmt = "ID does not match")]
+    MismatchedId,
+    /// 既に退店しています          
+    #[display(fmt = "This prostitute has already left")]
+    AlreadyLeft,
+    /// 既に入店しています
+    #[display(fmt = "This prostitute has already joined")]
+    AlreadyJoined,
+    /// 名前が空欄です                  
+    #[display(fmt = "Name cannot be blank")]
+    NameIsBlank,
+    /// キャッチフレーズが空欄です
+    #[display(fmt = "Catchphrase cannot be blank")]
+    CatchphraseIsBlank,
+    /// 質問が見つかりません
+    #[display(fmt = "Question not found")]
+    QuestionNotFound,
+    /// 質問のインデックスが重複しています
+    #[display(fmt = "Duplicate question index")]
+    DuplicateQuestionIndex,
+    /// 画像が既に存在します
+    #[display(fmt = "Image already exists")]
+    DuplicateImage,
+    /// 画像が見つかりません
+    #[display(fmt = "Image not found")]
+    ImageNotFound,
+    /// 画像のインデックスが重複しています
+    #[display(fmt = "Duplicate image index")]
+    DuplicateImageIndex,
 }
 
-impl fmt::Display for ProstituteError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NameIsEmpty => f.write_str("Name cannot be empty"),
-            Self::CatchphraseIsEmpty => f.write_str("Name cannot be empty"),
-            Self::QuestionIsNotExists => f.write_str("Question is not exists"),
-        }
-    }
-}
-
-impl Error for ProstituteError {}
-
+/// 体型
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Figure {
     pub vital_statistics: Option<VitalStatistics>,
-    pub tall: Option<u16>,
+    pub cup_size: Option<CupSize>,
+    pub height: Option<u16>,
     pub weight: Option<u16>,
 }
 
+impl Figure {
+    pub fn bmi(&self) -> Option<f32> {
+        let fn_bmi = |(weight, height): (f32, f32)| weight / height.powi(2);
+        self.weight
+            .map(f32::from)
+            .zip(self.height.map(f32::from))
+            .map(fn_bmi)
+    }
+
+    pub fn cup_size(&self) -> Option<CupSize> {
+        self.cup_size.or(self
+            .vital_statistics
+            .clone()
+            .map_or(None, |v| v.bust.cup_size()))
+    }
+
+    pub fn figure_type(&self) -> Vec<FigureType> {
+        let mut result = Vec::new();
+        if let Some(h) = self.height {
+            if h < 155 {
+                result.push(FigureType::Petite);
+            }
+            if h >= 165 {
+                result.push(FigureType::Tall);
+            }
+            if let Some(v) = &self.vital_statistics {
+                if v.bust.top > h * 58 / 100 && v.waist < h * 41 / 100 && v.hip > h * 58 / 100 {
+                    result.push(FigureType::Voluptuous);
+                }
+            }
+        }
+        if let Some(bmi) = self.bmi() {
+            if bmi < 18.5 {
+                result.push(FigureType::Slender);
+            }
+            if bmi >= 23.0 && bmi < 25.0 {
+                result.push(FigureType::Plump);
+            }
+            if bmi >= 25.0 {
+                result.push(FigureType::Chubby);
+            }
+        }
+        if self.height.is_some() && self.weight.is_some() && result.is_empty() {
+            result.push(FigureType::Normal);
+        }
+        result
+    }
+}
+
+/// 体型の種類
+#[derive(Debug, Display, PartialEq, Eq)]
+pub enum FigureType {
+    /// スレンダー
+    #[display(fmt = "スレンダー")]
+    Slender,
+    /// ぽっちゃり
+    #[display(fmt = "ぽっちゃり")]
+    Plump,
+    /// 小柄
+    #[display(fmt = "小柄")]
+    Petite,
+    /// 長身
+    #[display(fmt = "長身")]
+    Tall,
+    /// 普通
+    #[display(fmt = "普通")]
+    Normal,
+    /// グラマー
+    #[display(fmt = "グラマー")]
+    Voluptuous,
+    /// 肥満
+    #[display(fmt = "肥満")]
+    Chubby,
+}
+
+/// スリーサイズ
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VitalStatistics {
     pub waist: u16,
@@ -585,13 +824,21 @@ pub struct VitalStatistics {
     pub hip: u16,
 }
 
+/// バスト
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bust {
     pub top: u16,
     pub under: Option<u16>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl Bust {
+    pub fn cup_size(&self) -> Option<CupSize> {
+        Some(CupSize::new(self.top, self.under?))
+    }
+}
+
+/// カップサイズ
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display)]
 pub enum CupSize {
     AAA,
     AA,
@@ -623,14 +870,8 @@ pub enum CupSize {
     Z,
 }
 
-impl Bust {
-    pub fn cup_size(&self) -> Option<CupSize> {
-        Some(CupSize::from(self.top, self.under?))
-    }
-}
-
 impl CupSize {
-    pub fn from(top_bust: u16, under_bust: u16) -> Self {
+    pub fn new(top_bust: u16, under_bust: u16) -> Self {
         match top_bust.checked_sub(under_bust) {
             None => Self::AAA,
             Some(0..=6) => Self::AAA,
@@ -665,7 +906,8 @@ impl CupSize {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 血液型
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Display)]
 pub enum BloodType {
     A,
     B,
@@ -706,6 +948,9 @@ mod tests {
 
     #[test]
     fn test_cup_size_from() {
-        assert_eq!(CupSize::from(90, 65), CupSize::G);
+        assert_eq!(CupSize::new(88, 65), CupSize::F);
+        assert_eq!(CupSize::new(89, 65), CupSize::G);
+        assert_eq!(CupSize::new(91, 65), CupSize::G);
+        assert_eq!(CupSize::new(92, 65), CupSize::H);
     }
 }

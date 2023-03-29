@@ -1,0 +1,12 @@
+[package]
+name = "dely_web"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum.workspace = true
+axum-server.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

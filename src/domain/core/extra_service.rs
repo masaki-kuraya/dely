@@ -1,10 +1,11 @@
-use crate::domain::{DataAccessError, Entity, Event, EventQueue, EventQueueIntoIter, Id};
+use std::fmt;
+
 use async_trait::async_trait;
-use core::fmt;
+use derive_more::{Deref, Display, Error, From, IntoIterator};
 use num_format::{Locale, ToFormattedString};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
-use thiserror::Error;
+
+use crate::domain::{Aggregation, DataAccessError, Entity, Event, EventQueue, Id};
 
 #[async_trait]
 pub trait ExtraServiceRepository {
@@ -14,36 +15,18 @@ pub trait ExtraServiceRepository {
     async fn delete(&mut self, entity: &mut ExtraService) -> Result<bool, DataAccessError>;
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display, From, Deref, Default,
+)]
 pub struct ExtraServiceId(u64);
 
 impl Id for ExtraServiceId {
     type Inner = u64;
 }
 
-impl fmt::Display for ExtraServiceId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Deref for ExtraServiceId {
-    type Target = u64;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<u64> for ExtraServiceId {
-    fn from(value: u64) -> Self {
-        Self(value)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExtraServiceEvent {
-    Create {
+    Created {
         id: ExtraServiceId,
         name: String,
         description: String,
@@ -61,19 +44,23 @@ pub enum ExtraServiceEvent {
         id: ExtraServiceId,
         price: Price,
     },
+    Deleted {
+        id: ExtraServiceId,
+    },
 }
 
 impl Event for ExtraServiceEvent {
     type Id = ExtraServiceId;
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, IntoIterator, Serialize, Deserialize)]
 pub struct ExtraService {
     id: ExtraServiceId,
     name: String,
     description: String,
     price: Price,
-
+    #[serde(skip)]
+    #[into_iterator]
     events: EventQueue<ExtraServiceEvent>,
 }
 
@@ -85,7 +72,7 @@ impl ExtraService {
         price: Price,
     ) -> Result<Self, ExtraServiceError> {
         let mut entity = ExtraService::default();
-        let event = ExtraServiceEvent::Create {
+        let event = ExtraServiceEvent::Created {
             id,
             name,
             description,
@@ -131,12 +118,17 @@ impl ExtraService {
 
 impl Entity for ExtraService {
     type Id = ExtraServiceId;
-    type Event = ExtraServiceEvent;
-    type Error = ExtraServiceError;
 
-    fn id(&self) ->  Self::Id {
+    const ENTITY_NAME: &'static str = "extra_service";
+
+    fn id(&self) -> Self::Id {
         self.id
     }
+}
+
+impl Aggregation for ExtraService {
+    type Event = ExtraServiceEvent;
+    type Error = ExtraServiceError;
 
     fn validate(&self, event: &Self::Event) -> Result<(), Self::Error> {
         let validate_name = |name: &str| {
@@ -147,10 +139,11 @@ impl Entity for ExtraService {
             }
         };
         match event {
-            ExtraServiceEvent::Create { name, .. } => validate_name(&name),
+            ExtraServiceEvent::Created { name, .. } => validate_name(&name),
             ExtraServiceEvent::NameChanged { name, .. } => validate_name(&name),
             ExtraServiceEvent::DescriptionChanged { .. } => Ok(()),
             ExtraServiceEvent::PriceChanged { .. } => Ok(()),
+            ExtraServiceEvent::Deleted { .. } => Ok(()),
         }
     }
 
@@ -159,7 +152,7 @@ impl Entity for ExtraService {
             return;
         }
         match event.clone() {
-            ExtraServiceEvent::Create {
+            ExtraServiceEvent::Created {
                 id,
                 name,
                 description,
@@ -193,12 +186,9 @@ impl Entity for ExtraService {
                 }
                 self.price = price;
             }
+            ExtraServiceEvent::Deleted { .. } => {}
         }
         self.events.push(event);
-    }
-
-    fn entity_name() -> &'static str {
-        "extra_service"
     }
 
     fn events(&self) -> &EventQueue<Self::Event> {
@@ -207,14 +197,6 @@ impl Entity for ExtraService {
 
     fn events_mut(&mut self) -> &mut EventQueue<Self::Event> {
         &mut self.events
-    }
-}
-
-impl IntoIterator for ExtraService {
-    type Item = ExtraServiceEvent;
-    type IntoIter = EventQueueIntoIter<Self::Item>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.events.into_iter()
     }
 }
 
@@ -229,16 +211,10 @@ impl PartialEq for ExtraService {
 
 impl Eq for ExtraService {}
 
-#[derive(Error, Debug)]
+#[derive(Error, Display, Debug)]
 pub enum ExtraServiceError {
-    #[error("Name cannot be empty")]
+    #[display(fmt = "Name cannot be empty")]
     NameIsEmpty,
-}
-
-impl From<ExtraServiceError> for DataAccessError {
-    fn from(value: ExtraServiceError) -> Self {
-        Self::ClientSideError(Box::new(value))
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -274,13 +250,13 @@ mod tests {
     #[tokio::test]
     async fn test_extra_service_create() {
         let service = ExtraService::create(
-            ExtraServiceId(0),
+            ExtraServiceId(30),
             "AF".to_owned(),
             "アナルセックスを指します。".to_owned(),
             Price::new(10000, Currency::JPY),
         )
         .unwrap();
-        assert_ne!(service.id(), ExtraServiceId(0));
+        assert_eq!(service.id(), ExtraServiceId(30));
         assert_eq!(service.name(), "AF");
         assert_eq!(service.description(), "アナルセックスを指します。");
         assert_eq!(service.price(), &Price::new(10000, Currency::JPY));

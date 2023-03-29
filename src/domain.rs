@@ -1,19 +1,18 @@
 pub mod core;
 pub mod customer;
-pub mod reserve;
 
+use derive_more::{Display, From};
 use once_cell::sync;
 use serde::{Deserialize, Serialize};
 use snowflake::SnowflakeIdGenerator;
 use std::{
     collections::VecDeque,
-    error::Error,
+    error,
     fmt::{Debug, Display},
     ops::Deref,
     str::FromStr,
     sync::Arc,
 };
-use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -32,19 +31,26 @@ pub trait Id:
     type Inner: FromStr;
 }
 
-pub trait Event: Clone + Eq + Debug + Serialize + for<'a> Deserialize<'a> {
+pub trait Event: Clone + Eq + Debug + Serialize + for<'de> Deserialize<'de> {
     type Id;
 }
 
-pub trait Entity: IntoIterator<Item = Self::Event> + Debug + Default + Clone {
+pub trait Entity: Eq + Debug + Default + Clone + Serialize + for<'de> Deserialize<'de> {
     type Id: Id;
-    type Event: Event<Id = Self::Id>;
-    type Error: Error;
+
+    const ENTITY_NAME: &'static str;
 
     fn id(&self) -> Self::Id;
+}
+
+pub trait Aggregation: Entity +
+    IntoIterator<Item = Self::Event>
+{
+    type Event: Event<Id = Self::Id>;
+    type Error: error::Error;
+
     fn validate(&self, event: &Self::Event) -> Result<(), Self::Error>;
     fn apply(&mut self, event: Self::Event);
-    fn entity_name() -> &'static str;
     fn events(&self) -> &EventQueue<Self::Event>;
     fn events_mut(&mut self) -> &mut EventQueue<Self::Event>;
     fn pop(&mut self) -> Option<Self::Event> {
@@ -71,18 +77,30 @@ pub trait Entity: IntoIterator<Item = Self::Event> + Debug + Default + Clone {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(Display, Debug)]
 pub enum DataAccessError {
-    #[error("Database connection error: {0}")]
-    ConnectionError(Box<dyn Error>),
-    #[error("Database query error: {0}")]
-    QueryError(Box<dyn Error>),
-    #[error("Data read error: {0}")]
-    ReadError(Box<dyn Error>),
-    #[error("Data write error: {0}")]
-    WriteError(Box<dyn Error>),
-    #[error("Client side error: {0}")]
-    ClientSideError(Box<dyn Error>),
+    #[display(fmt = "Database connection error: {}", "_0.to_string()")]
+    ConnectionError(Box<dyn error::Error>),
+    #[display(fmt = "Database query error: {}", "_0.to_string()")]
+    QueryError(Box<dyn error::Error>),
+    #[display(fmt = "Data read error: {}", "_0.to_string()")]
+    ReadError(Box<dyn error::Error>),
+    #[display(fmt = "Data write error: {}", "_0.to_string()")]
+    WriteError(Box<dyn error::Error>),
+    #[display(fmt = "Client side error: {}", "_0.to_string()")]
+    ClientSideError(Box<dyn error::Error>),
+}
+
+impl error::Error for DataAccessError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            DataAccessError::ConnectionError(e) => Some(e.as_ref()),
+            DataAccessError::QueryError(e) => Some(e.as_ref()),
+            DataAccessError::ReadError(e) => Some(e.as_ref()),
+            DataAccessError::WriteError(e) => Some(e.as_ref()),
+            DataAccessError::ClientSideError(e) => Some(e.as_ref()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -134,21 +152,16 @@ pub type EventQueueIntoIter<T> = std::collections::vec_deque::IntoIter<T>;
 pub type EventQueueIter<'a, T> = std::collections::vec_deque::Iter<'a, T>;
 pub type EventQueueIterMut<'a, T> = std::collections::vec_deque::IterMut<'a, T>;
 
+#[derive(From)]
 pub struct IdGenerator(SnowflakeIdGenerator);
 
 impl IdGenerator {
-    pub fn new(gen: SnowflakeIdGenerator) -> Self {
-        Self(gen)
-    }
-
     pub fn generate(&mut self) -> u64 {
         self.0.generate() as u64
     }
-}
 
-impl From<SnowflakeIdGenerator> for IdGenerator {
-    fn from(value: SnowflakeIdGenerator) -> Self {
-        Self::new(value)
+    pub fn new(gen: SnowflakeIdGenerator) -> Self {
+        Self(gen)
     }
 }
 

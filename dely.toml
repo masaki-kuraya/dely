@@ -1,0 +1,9 @@
+[eventstore]
+url = "esdb://admin:changeit@localhost:2111,localhost:2112?nodepreference=leader"
+
+[meilisearch]
+url = "http://localhost:7701"
+api_key = "afa6a8971f7dd772900c18f87bf9f20c4407a692cffc8323c1941bf9d9ff530f"
+
+[logger]
+level = "INFO"

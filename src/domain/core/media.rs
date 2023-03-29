@@ -1,11 +1,8 @@
-use core::fmt;
-use std::ops::Deref;
-
 use async_trait::async_trait;
+use derive_more::{Deref, Display, Error, From, IntoIterator};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-use crate::domain::{DataAccessError, Entity, EventQueue, EventQueueIntoIter, Id, Event};
+use crate::domain::{Aggregation, DataAccessError, Entity, Event, EventQueue, Id};
 
 use super::Mime;
 
@@ -16,39 +13,24 @@ pub trait MediaRepository {
     async fn delete(&mut self, entity: &mut Media) -> Result<bool, DataAccessError>;
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display, From, Deref, Default, Hash
+)]
 pub struct MediaId(pub u64);
 
 impl Id for MediaId {
     type Inner = u64;
 }
 
-impl fmt::Display for MediaId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Deref for MediaId {
-    type Target = u64;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<u64> for MediaId {
-    fn from(value: u64) -> Self {
-        Self(value)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaEvent {
-    Create {
+    Created {
         id: MediaId,
         mime: Mime,
         data: Vec<u8>,
+    },
+    Deleted {
+        id: MediaId,
     },
 }
 
@@ -56,19 +38,21 @@ impl Event for MediaEvent {
     type Id = MediaId;
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, IntoIterator, Serialize, Deserialize)]
 pub struct Media {
     id: MediaId,
     mime: Mime,
+    #[serde(with = "base64")]
     data: Vec<u8>,
-
+    #[serde(skip)]
+    #[into_iterator]
     events: EventQueue<MediaEvent>,
 }
 
 impl Media {
     pub fn create(id: MediaId, mime: Mime, data: Vec<u8>) -> Result<Self, MediaError> {
         let mut entity = Media::default();
-        let event = MediaEvent::Create { id, mime, data };
+        let event = MediaEvent::Created { id, mime, data };
         entity.validate(&event)?;
         entity.apply(event);
         Ok(entity)
@@ -85,22 +69,28 @@ impl Media {
 
 impl Entity for Media {
     type Id = MediaId;
-    type Event = MediaEvent;
-    type Error = MediaError;
+
+    const ENTITY_NAME: &'static str = "media";
 
     fn id(&self) -> Self::Id {
         self.id
     }
+}
+
+impl Aggregation for Media {
+    type Event = MediaEvent;
+    type Error = MediaError;
 
     fn validate(&self, event: &Self::Event) -> Result<(), Self::Error> {
         match event {
-            MediaEvent::Create { data, .. } => {
+            MediaEvent::Created { data, .. } => {
                 if data.is_empty() {
                     Err(MediaError::DataIsEmpty)
                 } else {
                     Ok(())
                 }
             }
+            MediaEvent::Deleted { .. } => Ok(()),
         }
     }
 
@@ -109,7 +99,7 @@ impl Entity for Media {
             return;
         }
         match event.clone() {
-            MediaEvent::Create { id, mime, data } => {
+            MediaEvent::Created { id, mime, data } => {
                 if self.id == id {
                     return;
                 }
@@ -117,12 +107,9 @@ impl Entity for Media {
                 self.mime = mime;
                 self.data = data;
             }
+            MediaEvent::Deleted { .. } => {}
         }
         self.events.push(event);
-    }
-
-    fn entity_name() -> &'static str {
-        "media"
     }
 
     fn events(&self) -> &EventQueue<Self::Event> {
@@ -132,15 +119,6 @@ impl Entity for Media {
     fn events_mut(&mut self) -> &mut EventQueue<Self::Event> {
         &mut self.events
     }
-
-}
-
-impl IntoIterator for Media {
-    type Item = MediaEvent;
-    type IntoIter = EventQueueIntoIter<Self::Item>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.events.into_iter()
-    }
 }
 
 impl PartialEq for Media {
@@ -149,14 +127,28 @@ impl PartialEq for Media {
     }
 }
 
-#[derive(Error, Debug)]
+impl Eq for Media {}
+
+#[derive(Error, Display, Debug)]
 pub enum MediaError {
-    #[error("Data cannot be empty")]
+    #[display(fmt = "Data cannot be empty")]
     DataIsEmpty,
 }
 
-impl From<MediaError> for DataAccessError {
-    fn from(value: MediaError) -> Self {
-        Self::ClientSideError(Box::new(value))
+mod base64 {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
+        let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, v);
+        String::serialize(&base64, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let base64 = String::deserialize(d)?;
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            base64.as_bytes(),
+        )
+        .map_err(|e| serde::de::Error::custom(e))
     }
 }

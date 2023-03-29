@@ -4,9 +4,9 @@ use eventstore::{AppendToStreamOptions, Client, EventData, ExpectedRevision, Res
 use crate::domain::core::{
     ExtraService, ExtraServiceEvent, ExtraServiceId, ExtraServiceRepository,
 };
-use crate::domain::{DataAccessError, Entity};
-use crate::infrastructure::{EventConvertError, stream_name};
+use crate::domain::{DataAccessError, Aggregation, Entity};
 use crate::infrastructure::{from_event, try_from_resolved_event};
+use crate::infrastructure::{stream_name, EventConvertError};
 
 #[derive(Clone)]
 pub struct EventStoreExtraServiceRepository {
@@ -34,7 +34,7 @@ impl ExtraServiceRepository for EventStoreExtraServiceRepository {
                 let mut entity = ExtraService::default();
                 loop {
                     match stream.next().await {
-                        Ok(Some(e)) => entity.apply(e.try_into()?),
+                        Ok(Some(e)) => entity.apply(TryFrom::try_from(&e)?),
                         Ok(_) => break,
                         Err(eventstore::Error::ResourceDeleted) => return Ok(None),
                         Err(eventstore::Error::ResourceNotFound) => return Ok(None),
@@ -55,7 +55,7 @@ impl ExtraServiceRepository for EventStoreExtraServiceRepository {
     async fn save(&mut self, entity: &mut ExtraService) -> Result<bool, DataAccessError> {
         let stream_name = stream_name::<ExtraService>(entity.id());
         let rev = match entity.peek() {
-            Some(ExtraServiceEvent::Create { .. }) => ExpectedRevision::NoStream,
+            Some(ExtraServiceEvent::Created { .. }) => ExpectedRevision::NoStream,
             Some(_) => ExpectedRevision::StreamExists,
             None => return Ok(false),
         };
@@ -75,6 +75,11 @@ impl ExtraServiceRepository for EventStoreExtraServiceRepository {
 
     async fn delete(&mut self, entity: &mut ExtraService) -> Result<bool, DataAccessError> {
         let stream_name = stream_name::<ExtraService>(entity.id());
+        self.client.append_to_stream(
+            &stream_name,
+            &AppendToStreamOptions::default().expected_revision(ExpectedRevision::StreamExists),
+            EventData::from(ExtraServiceEvent::Deleted { id: entity.id() }),
+        ).await?;
         self.client
             .delete_stream(&stream_name, &Default::default())
             .await?;
@@ -88,10 +93,10 @@ impl From<ExtraServiceEvent> for EventData {
     }
 }
 
-impl TryFrom<ResolvedEvent> for ExtraServiceEvent {
+impl TryFrom<&ResolvedEvent> for ExtraServiceEvent {
     type Error = EventConvertError;
 
-    fn try_from(value: ResolvedEvent) -> Result<Self, Self::Error> {
+    fn try_from(value: &ResolvedEvent) -> Result<Self, Self::Error> {
         try_from_resolved_event(value)
     }
 }
@@ -101,9 +106,12 @@ mod tests {
     use eventstore::{Client, EventData, Position, RecordedEvent, ResolvedEvent};
     use serde_json::json;
 
-    use crate::domain::{
-        core::{Currency, ExtraService, ExtraServiceEvent, ExtraServiceRepository, Price},
-        ID_GENERATOR,
+    use crate::{
+        domain::{
+            core::{Currency, ExtraService, ExtraServiceEvent, ExtraServiceRepository, Price},
+            ID_GENERATOR,
+        },
+        DelyConfig,
     };
 
     use super::EventStoreExtraServiceRepository;
@@ -111,8 +119,8 @@ mod tests {
     #[tokio::test]
     async fn test_repository() {
         // リポジトリ作成
-        let settings = "esdb://localhost:2113?tls=false".parse().unwrap();
-        let client = Client::new(settings).unwrap();
+        let config = DelyConfig::load().unwrap();
+        let client = Client::new(config.eventstore.url.parse().unwrap()).unwrap();
         let mut repo = EventStoreExtraServiceRepository::new(client.clone());
 
         let id = ID_GENERATOR.generate().await;
@@ -147,14 +155,14 @@ mod tests {
 
     #[test]
     fn test_event_data_from() {
-        let event = ExtraServiceEvent::Create {
+        let event = ExtraServiceEvent::Created {
             id: 999.into(),
             name: "サービス名".to_owned(),
             description: "説明".to_owned(),
             price: Price::new(1500, Currency::JPY),
         };
         let expected = EventData::json(
-            "Create",
+            "Created",
             json!({
                 "name": "サービス名",
                 "description": "説明",
@@ -200,12 +208,12 @@ mod tests {
             link: None,
             commit_position: None,
         };
-        let expected = ExtraServiceEvent::Create {
+        let expected = ExtraServiceEvent::Created {
             id: 100.into(),
             name: "テストサービス".to_owned(),
             description: "テスト説明です".to_owned(),
             price: Price::new(5000, Currency::JPY),
         };
-        assert_eq!(ExtraServiceEvent::try_from(event).ok(), Some(expected));
+        assert_eq!(ExtraServiceEvent::try_from(&event).ok(), Some(expected));
     }
 }

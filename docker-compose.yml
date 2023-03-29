@@ -1,33 +1,99 @@
 version: "3.1"
 
 services:
-  eventstore:
+  setup:
+    image: eventstore/es-gencert-cli:latest
+    entrypoint: bash
+    user: "1000:1000"
+    command: >
+      -c "mkdir -p ./certs && cd /certs
+      && rm -rf ./node/
+      && es-gencert-cli create-ca -out ./
+      && es-gencert-cli create-node -ca-certificate ./ca/rootCA.pem -ca-key ./ca/rootCA.key -out ./node -ip-addresses 127.0.0.1,172.30.240.11,172.30.240.12 -dns-names localhost
+      && mv ./node/node.crt ./localhost.pem
+      && mv ./node/node.key ./localhost.key
+      && rm -r ./node/
+      && find . -type f -print0 | xargs -0 chmod 666"
+    container_name: setup
+    volumes:
+      - ./certs:/certs
+  eventstore.node1: &template
     image: eventstore/eventstore:latest
-    container_name: eventstore
-    ports:
-      - "2113:2113"
-      - "1113:1113"
-    volumes:
-      - ./data/eventstore:/var/lib/eventstore
+    container_name: eventstore.node1
     environment:
-      # - EVENTSTORE_RUN_PROJECTIONS=All
-      # - EVENTSTORE_START_STANDARD_PROJECTIONS=True
-      - EVENTSTORE_INSECURE=True
-      - EVENTSTORE_ENABLE_ATOM_PUB_OVER_HTTP=True
-  meilisearch:
-    image: getmeili/meilisearch:latest
-    container_name: meilisearch
+      - EVENTSTORE_CLUSTER_SIZE=2
+      - EVENTSTORE_TRUSTED_ROOT_CERTIFICATES_PATH=/certs/ca
+      - EVENTSTORE_CERTIFICATE_FILE=/certs/localhost.pem
+      - EVENTSTORE_CERTIFICATE_PRIVATE_KEY_FILE=/certs/localhost.key
+      - EVENTSTORE_RUN_PROJECTIONS=All
+      - EVENTSTORE_DISCOVER_VIA_DNS=false
+      - EVENTSTORE_ENABLE_EXTERNAL_TCP=true
+      - EVENTSTORE_ENABLE_ATOM_PUB_OVER_HTTP=true
+      - EVENTSTORE_ADVERTISE_HOST_TO_CLIENT_AS=localhost
+      - EVENTSTORE_INT_IP=172.30.240.11
+      - EVENTSTORE_ADVERTISE_HTTP_PORT_TO_CLIENT_AS=2111
+      - EVENTSTORE_ADVERTISE_TCP_PORT_TO_CLIENT_AS=1111
+      - EVENTSTORE_GOSSIP_SEED=172.30.240.12:2113
     ports:
-      - "7700:7700"
+      - 1111:1113
+      - 2111:2113
     volumes:
-      - "./data/meilisearch:/meili_data"
-  # db:
-  #   image: postgres
-  #   restart: always
-  #   environment:
-  #     POSTGRES_PASSWORD: TakamiChika0721
-  # adminer:
-  #   image: adminer
-  #   restart: always
-  #   ports:
-  #     - 8081:8080
+      - ./data/eventstore/node1:/var/lib/eventstore
+      - ./certs:/certs
+    depends_on:
+      - setup
+    networks:
+      cluster:
+        ipv4_address: 172.30.240.11
+  eventstore.node2:
+    <<: *template
+    container_name: eventstore.node2
+    environment:
+      - EVENTSTORE_CLUSTER_SIZE=2
+      - EVENTSTORE_TRUSTED_ROOT_CERTIFICATES_PATH=/certs/ca
+      - EVENTSTORE_CERTIFICATE_FILE=/certs/localhost.pem
+      - EVENTSTORE_CERTIFICATE_PRIVATE_KEY_FILE=/certs/localhost.key
+      - EVENTSTORE_RUN_PROJECTIONS=All
+      - EVENTSTORE_DISCOVER_VIA_DNS=false
+      - EVENTSTORE_ENABLE_EXTERNAL_TCP=true
+      - EVENTSTORE_ENABLE_ATOM_PUB_OVER_HTTP=true
+      - EVENTSTORE_ADVERTISE_HOST_TO_CLIENT_AS=localhost
+      - EVENTSTORE_INT_IP=172.30.240.12
+      - EVENTSTORE_ADVERTISE_HTTP_PORT_TO_CLIENT_AS=2112
+      - EVENTSTORE_ADVERTISE_TCP_PORT_TO_CLIENT_AS=1112
+      - EVENTSTORE_GOSSIP_SEED=172.30.240.11:2113
+    ports:
+      - 1112:1113
+      - 2112:2113
+    networks:
+      cluster:
+        ipv4_address: 172.30.240.12
+    volumes:
+      - ./data/eventstore/node2:/var/lib/eventstore
+      - ./certs:/certs
+  meilisearch.node1:
+    image: getmeili/meilisearch:latest
+    container_name: meilisearch.node1
+    ports:
+      - "7701:7700"
+    environment:
+      - MEILI_MASTER_KEY=TjOsxVkLSxHNiG5wpn8nPd5OY5iBwU2j
+    volumes:
+      - ./data/meilisearch/node1:/meili_data
+  meilisearch.node2:
+    image: getmeili/meilisearch:latest
+    container_name: meilisearch.node2
+    ports:
+      - "7702:7700"
+    environment:
+      - MEILI_MASTER_KEY=TjOsxVkLSxHNiG5wpn8nPd5OY5iBwU2j
+    volumes:
+      - ./data/meilisearch/node2:/meili_data
+
+networks:
+  cluster:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.240.0/24

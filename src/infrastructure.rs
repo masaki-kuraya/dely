@@ -1,12 +1,13 @@
 pub mod core;
 
+use std::str::FromStr;
+
+use derive_more::{Display, Error};
 use eventstore::{EventData, ResolvedEvent};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::domain::{DataAccessError, Event, Id, Entity};
-
-use std::{fmt::Display, str::FromStr};
+use crate::domain::{DataAccessError, Aggregation, Event, Id};
 
 impl From<eventstore::Error> for DataAccessError {
     fn from(value: eventstore::Error) -> Self {
@@ -38,16 +39,9 @@ impl From<EventConvertError> for DataAccessError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Error, Display, Debug)]
+#[display(fmt = "Failed to convert event")]
 pub struct EventConvertError;
-
-impl std::error::Error for EventConvertError {}
-
-impl Display for EventConvertError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to convert event")
-    }
-}
 
 impl From<serde_json::Error> for EventConvertError {
     fn from(_value: serde_json::Error) -> Self {
@@ -67,8 +61,8 @@ where
         .last()
 }
 
-fn stream_name<E: Entity>(id: E::Id) -> String {
-    E::entity_name().to_owned() + "-" + &id.to_string()
+fn stream_name<E: Aggregation>(id: E::Id) -> String {
+    E::ENTITY_NAME.to_owned() + "-" + &id.to_string()
 }
 
 fn from_event<E: Event>(event: E) -> EventData {
@@ -79,7 +73,7 @@ fn from_event<E: Event>(event: E) -> EventData {
     EventData::json(event_type, data).unwrap()
 }
 
-fn try_from_resolved_event<E, I>(value: ResolvedEvent) -> Result<E, EventConvertError>
+fn try_from_resolved_event<E, I>(value: &ResolvedEvent) -> Result<E, EventConvertError>
 where
     E: DeserializeOwned + Event<Id = I>,
     I: Id,

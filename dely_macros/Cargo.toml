@@ -1,0 +1,12 @@
+[package]
+name = "dely_macros"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+syn = "2.0.8"
+quote = "1.0.26"
+
+[lib]
+proc-macro = true
