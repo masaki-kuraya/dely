@@ -8,7 +8,7 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 
 use crate::domain::core::{Media, MediaEvent, MediaId, MediaRepository};
-use crate::domain::{DataAccessError, Aggregation, Entity};
+use crate::domain::{Aggregation, DataAccessError, Entity};
 use crate::infrastructure::EventConvertError;
 use crate::infrastructure::{entity_id, stream_name};
 
@@ -35,7 +35,7 @@ impl MediaRepository for EventStoreMediaRepository {
                 let mut entity = Media::default();
                 loop {
                     match stream.next().await {
-                        Ok(Some(e)) => entity.apply(TryFrom::try_from(&e)?),
+                        Ok(Some(e)) => entity.apply(TryFrom::try_from(e)?),
                         Ok(_) => break,
                         Err(eventstore::Error::ResourceDeleted) => return Ok(None),
                         Err(eventstore::Error::ResourceNotFound) => return Ok(None),
@@ -56,7 +56,7 @@ impl MediaRepository for EventStoreMediaRepository {
     async fn save(&mut self, entity: &mut Media) -> Result<bool, DataAccessError> {
         let stream_name = stream_name::<Media>(entity.id());
         let rev = match entity.peek() {
-            Some(MediaEvent::Created { .. }) => ExpectedRevision::NoStream,
+            Some(MediaEvent::MediaCreated { .. }) => ExpectedRevision::NoStream,
             Some(_) => ExpectedRevision::StreamExists,
             None => return Ok(false),
         };
@@ -76,11 +76,13 @@ impl MediaRepository for EventStoreMediaRepository {
 
     async fn delete(&mut self, entity: &mut Media) -> Result<bool, DataAccessError> {
         let stream_name = stream_name::<Media>(entity.id());
-        self.client.append_to_stream(
-            &stream_name,
-            &AppendToStreamOptions::default().expected_revision(ExpectedRevision::StreamExists),
-            EventData::from(MediaEvent::Deleted { id: entity.id() }),
-        ).await?;
+        self.client
+            .append_to_stream(
+                &stream_name,
+                &AppendToStreamOptions::default().expected_revision(ExpectedRevision::StreamExists),
+                EventData::from(MediaEvent::MediaDeleted { id: entity.id() }),
+            )
+            .await?;
         self.client
             .delete_stream(stream_name, &DeleteStreamOptions::default())
             .await?;
@@ -91,25 +93,25 @@ impl MediaRepository for EventStoreMediaRepository {
 impl From<MediaEvent> for EventData {
     fn from(value: MediaEvent) -> Self {
         match value {
-            MediaEvent::Created { mime, data, .. } => {
+            MediaEvent::MediaCreated { mime, data, .. } => {
                 let mut meta = HashMap::new();
                 meta.insert("contentType".to_owned(), mime.to_string());
-                EventData::binary("Created", Bytes::from(data))
+                EventData::binary("MediaCreated", data)
                     .metadata_as_json(meta)
                     .unwrap()
             }
-            MediaEvent::Deleted { .. } => EventData::binary("Deleted", Bytes::default()),
+            MediaEvent::MediaDeleted { .. } => EventData::binary("MediaDeleted", Bytes::default()),
         }
     }
 }
 
-impl TryFrom<&ResolvedEvent> for MediaEvent {
+impl TryFrom<ResolvedEvent> for MediaEvent {
     type Error = EventConvertError;
 
-    fn try_from(value: &ResolvedEvent) -> Result<Self, Self::Error> {
-        let event = value.get_original_event();
+    fn try_from(value: ResolvedEvent) -> Result<Self, Self::Error> {
+        let event = value.link.or(value.event).ok_or(EventConvertError)?;
         match event.event_type.borrow() {
-            "Created" => Ok(MediaEvent::Created {
+            "MediaCreated" => Ok(MediaEvent::MediaCreated {
                 id: entity_id(&event.stream_id).ok_or(EventConvertError)?,
                 mime: serde_json::from_slice::<Value>(&event.custom_metadata)?
                     .as_object()
@@ -118,9 +120,9 @@ impl TryFrom<&ResolvedEvent> for MediaEvent {
                     .filter_map(Value::as_str)
                     .find_map(|s| s.parse().ok())
                     .ok_or(EventConvertError)?,
-                data: event.data.to_vec(),
+                data: event.data,
             }),
-            "Deleted" => Ok(MediaEvent::Deleted {
+            "MediaDeleted" => Ok(MediaEvent::MediaDeleted {
                 id: entity_id(&event.stream_id).ok_or(EventConvertError)?,
             }),
             _ => Err(EventConvertError),
@@ -130,6 +132,7 @@ impl TryFrom<&ResolvedEvent> for MediaEvent {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use eventstore::Client;
 
     use crate::{
@@ -153,8 +156,7 @@ mod tests {
         let id = ID_GENERATOR.generate().await;
         let mut entity = Media::create(
             id,
-            "image/gif".parse().unwrap(),
-            b"\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\xF0\x00\x00\xFF\xFF\xFF\x00\x00\x00\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3B".to_vec(),
+            Bytes::from(b"\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\xF0\x00\x00\xFF\xFF\xFF\x00\x00\x00\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3B".to_vec()),
         )
         .unwrap();
 
@@ -164,8 +166,7 @@ mod tests {
             repo.find_by_id(id).await.unwrap(),
             Media::create(
                 id,
-                "image/gif".parse().unwrap(),
-                b"\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\xF0\x00\x00\xFF\xFF\xFF\x00\x00\x00\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3B".to_vec()
+                Bytes::from(b"\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\xF0\x00\x00\xFF\xFF\xFF\x00\x00\x00\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3B".to_vec())
             )
             .ok()
         );

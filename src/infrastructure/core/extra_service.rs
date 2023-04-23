@@ -34,7 +34,7 @@ impl ExtraServiceRepository for EventStoreExtraServiceRepository {
                 let mut entity = ExtraService::default();
                 loop {
                     match stream.next().await {
-                        Ok(Some(e)) => entity.apply(TryFrom::try_from(&e)?),
+                        Ok(Some(e)) => entity.apply(TryFrom::try_from(e)?),
                         Ok(_) => break,
                         Err(eventstore::Error::ResourceDeleted) => return Ok(None),
                         Err(eventstore::Error::ResourceNotFound) => return Ok(None),
@@ -55,7 +55,7 @@ impl ExtraServiceRepository for EventStoreExtraServiceRepository {
     async fn save(&mut self, entity: &mut ExtraService) -> Result<bool, DataAccessError> {
         let stream_name = stream_name::<ExtraService>(entity.id());
         let rev = match entity.peek() {
-            Some(ExtraServiceEvent::Created { .. }) => ExpectedRevision::NoStream,
+            Some(ExtraServiceEvent::ExtraServiceCreated { .. }) => ExpectedRevision::NoStream,
             Some(_) => ExpectedRevision::StreamExists,
             None => return Ok(false),
         };
@@ -78,7 +78,7 @@ impl ExtraServiceRepository for EventStoreExtraServiceRepository {
         self.client.append_to_stream(
             &stream_name,
             &AppendToStreamOptions::default().expected_revision(ExpectedRevision::StreamExists),
-            EventData::from(ExtraServiceEvent::Deleted { id: entity.id() }),
+            EventData::from(ExtraServiceEvent::ExtraServiceDeleted { id: entity.id() }),
         ).await?;
         self.client
             .delete_stream(&stream_name, &Default::default())
@@ -93,10 +93,10 @@ impl From<ExtraServiceEvent> for EventData {
     }
 }
 
-impl TryFrom<&ResolvedEvent> for ExtraServiceEvent {
+impl TryFrom<ResolvedEvent> for ExtraServiceEvent {
     type Error = EventConvertError;
 
-    fn try_from(value: &ResolvedEvent) -> Result<Self, Self::Error> {
+    fn try_from(value: ResolvedEvent) -> Result<Self, Self::Error> {
         try_from_resolved_event(value)
     }
 }
@@ -108,7 +108,7 @@ mod tests {
 
     use crate::{
         domain::{
-            core::{Currency, ExtraService, ExtraServiceEvent, ExtraServiceRepository, Price},
+            core::{Currency, ExtraService, ExtraServiceEvent, ExtraServiceRepository, Money},
             ID_GENERATOR,
         },
         DelyConfig,
@@ -130,7 +130,7 @@ mod tests {
             id,
             "名前".to_owned(),
             "説明".to_owned(),
-            Price::new(1500, Currency::JPY),
+            Money::new(1500, Currency::JPY),
         )
         .unwrap();
         entity.change_name("サービス名改".to_owned()).unwrap();
@@ -143,7 +143,7 @@ mod tests {
                 id,
                 "サービス名改".to_owned(),
                 "説明".to_owned(),
-                Price::new(1500, Currency::JPY),
+                Money::new(1500, Currency::JPY),
             )
             .ok()
         );
@@ -155,11 +155,11 @@ mod tests {
 
     #[test]
     fn test_event_data_from() {
-        let event = ExtraServiceEvent::Created {
+        let event = ExtraServiceEvent::ExtraServiceCreated {
             id: 999.into(),
             name: "サービス名".to_owned(),
             description: "説明".to_owned(),
-            price: Price::new(1500, Currency::JPY),
+            price: Money::new(1500, Currency::JPY),
         };
         let expected = EventData::json(
             "Created",
@@ -208,12 +208,12 @@ mod tests {
             link: None,
             commit_position: None,
         };
-        let expected = ExtraServiceEvent::Created {
+        let expected = ExtraServiceEvent::ExtraServiceCreated {
             id: 100.into(),
             name: "テストサービス".to_owned(),
             description: "テスト説明です".to_owned(),
-            price: Price::new(5000, Currency::JPY),
+            price: Money::new(5000, Currency::JPY),
         };
-        assert_eq!(ExtraServiceEvent::try_from(&event).ok(), Some(expected));
+        assert_eq!(ExtraServiceEvent::try_from(event).ok(), Some(expected));
     }
 }

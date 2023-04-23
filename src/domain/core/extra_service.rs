@@ -1,20 +1,24 @@
-use std::fmt;
-
 use async_trait::async_trait;
 use derive_more::{Deref, Display, Error, From, IntoIterator};
-use num_format::{Locale, ToFormattedString};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{Aggregation, DataAccessError, Entity, Event, EventQueue, Id};
 
+use super::Money;
+
+/// オプションサービスリポジトリ
 #[async_trait]
 pub trait ExtraServiceRepository {
+    /// オプションサービスをIDで検索する
     async fn find_by_id(&self, id: ExtraServiceId)
         -> Result<Option<ExtraService>, DataAccessError>;
+    /// オプションサービスを保存する
     async fn save(&mut self, entity: &mut ExtraService) -> Result<bool, DataAccessError>;
+    /// オプションサービスを削除する
     async fn delete(&mut self, entity: &mut ExtraService) -> Result<bool, DataAccessError>;
 }
 
+/// オプションサービスID
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display, From, Deref, Default,
 )]
@@ -24,27 +28,33 @@ impl Id for ExtraServiceId {
     type Inner = u64;
 }
 
+/// オプションサービスイベント
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExtraServiceEvent {
-    Created {
+    /// オプションサービスが作成された
+    ExtraServiceCreated {
         id: ExtraServiceId,
         name: String,
         description: String,
-        price: Price,
+        price: Money,
     },
-    NameChanged {
+    /// オプションサービス名が変更された
+    ExtraServiceNameChanged {
         id: ExtraServiceId,
         name: String,
     },
-    DescriptionChanged {
+    /// オプションサービス説明が変更された
+    ExtraServiceDescriptionChanged {
         id: ExtraServiceId,
         description: String,
     },
-    PriceChanged {
+    /// オプションサービス料金が変更された
+    ExtraServicePriceChanged {
         id: ExtraServiceId,
-        price: Price,
+        price: Money,
     },
-    Deleted {
+    /// オプションサービスが削除された
+    ExtraServiceDeleted {
         id: ExtraServiceId,
     },
 }
@@ -53,12 +63,13 @@ impl Event for ExtraServiceEvent {
     type Id = ExtraServiceId;
 }
 
+/// オプションサービスエンティティ
 #[derive(Debug, Default, Clone, IntoIterator, Serialize, Deserialize)]
 pub struct ExtraService {
     id: ExtraServiceId,
     name: String,
     description: String,
-    price: Price,
+    price: Money,
     #[serde(skip)]
     #[into_iterator]
     events: EventQueue<ExtraServiceEvent>,
@@ -69,38 +80,45 @@ impl ExtraService {
         id: ExtraServiceId,
         name: String,
         description: String,
-        price: Price,
+        price: Money,
     ) -> Result<Self, ExtraServiceError> {
-        let mut entity = ExtraService::default();
-        let event = ExtraServiceEvent::Created {
+        Self::validate_created(&name)?;
+        let mut entity = ExtraService {
+            id,
+            name: name.clone(),
+            description: description.clone(),
+            price: price.clone(),
+            ..Default::default()
+        };
+        entity.events.push(ExtraServiceEvent::ExtraServiceCreated {
             id,
             name,
             description,
             price,
-        };
-        entity.validate(&event)?;
-        entity.apply(event);
+        });
         Ok(entity)
     }
 
     pub fn change_name(&mut self, name: String) -> Result<(), ExtraServiceError> {
-        let event = ExtraServiceEvent::NameChanged { id: self.id, name };
-        self.validate(&event)?;
-        self.apply(event);
+        Self::validate_name_changed(&name)?;
+        self.name = name.clone();
+        self.events
+            .push(ExtraServiceEvent::ExtraServiceNameChanged { id: self.id, name });
         Ok(())
     }
 
     pub fn change_description(&mut self, description: String) {
-        let event = ExtraServiceEvent::DescriptionChanged {
+        self.description = description.clone();
+        self.events.push(ExtraServiceEvent::ExtraServiceDescriptionChanged {
             id: self.id,
             description,
-        };
-        self.apply(event);
+        });
     }
 
-    pub fn change_price(&mut self, price: Price) {
-        let event = ExtraServiceEvent::PriceChanged { id: self.id, price };
-        self.apply(event);
+    pub fn change_price(&mut self, price: Money) {
+        self.price = price.clone();
+        self.events
+            .push(ExtraServiceEvent::ExtraServicePriceChanged { id: self.id, price });
     }
 
     pub fn name(&self) -> &String {
@@ -111,8 +129,26 @@ impl ExtraService {
         &self.description
     }
 
-    pub fn price(&self) -> &Price {
+    pub fn price(&self) -> &Money {
         &self.price
+    }
+
+    fn validate_id(&self, id: &ExtraServiceId) -> Result<(), ExtraServiceError> {
+        match self.id == *id {
+            true => Ok(()),
+            false => Err(ExtraServiceError::MismatchedId),
+        }
+    }
+
+    fn validate_created(name: &str) -> Result<(), ExtraServiceError> {
+        Self::validate_name_changed(name)
+    }
+
+    fn validate_name_changed(name: &str) -> Result<(), ExtraServiceError> {
+        match name.trim().is_empty() {
+            true => Err(ExtraServiceError::NameIsBlank),
+            false => Ok(()),
+        }
     }
 }
 
@@ -131,64 +167,51 @@ impl Aggregation for ExtraService {
     type Error = ExtraServiceError;
 
     fn validate(&self, event: &Self::Event) -> Result<(), Self::Error> {
-        let validate_name = |name: &str| {
-            if name.trim().is_empty() {
-                Err(ExtraServiceError::NameIsEmpty)
-            } else {
-                Ok(())
-            }
-        };
         match event {
-            ExtraServiceEvent::Created { name, .. } => validate_name(&name),
-            ExtraServiceEvent::NameChanged { name, .. } => validate_name(&name),
-            ExtraServiceEvent::DescriptionChanged { .. } => Ok(()),
-            ExtraServiceEvent::PriceChanged { .. } => Ok(()),
-            ExtraServiceEvent::Deleted { .. } => Ok(()),
+            ExtraServiceEvent::ExtraServiceCreated { name, .. } => Self::validate_created(name),
+            ExtraServiceEvent::ExtraServiceNameChanged { id, name, .. } => {
+                self.validate_id(id)?;
+                Self::validate_name_changed(name)
+            }
+            ExtraServiceEvent::ExtraServiceDescriptionChanged { id, .. }
+            | ExtraServiceEvent::ExtraServicePriceChanged { id, .. }
+            | ExtraServiceEvent::ExtraServiceDeleted { id, .. } => self.validate_id(id),
         }
     }
 
     fn apply(&mut self, event: Self::Event) {
-        if let Err(_) = self.validate(&event) {
-            return;
-        }
-        match event.clone() {
-            ExtraServiceEvent::Created {
+        match event {
+            ExtraServiceEvent::ExtraServiceCreated {
                 id,
                 name,
                 description,
                 price,
             } => {
-                if self.id == id {
-                    return;
-                }
-                self.id = id;
-                self.name = name;
-                self.description = description;
-                self.price = price;
-            }
-            ExtraServiceEvent::NameChanged { id, name, .. } => {
                 if self.id != id {
-                    return;
+                    if let Ok(entity) = Self::create(id, name, description, price) {
+                        *self = entity;
+                    }
                 }
-                self.name = name;
             }
-            ExtraServiceEvent::DescriptionChanged {
+            ExtraServiceEvent::ExtraServiceNameChanged { id, name, .. } => {
+                if self.id == id {
+                    if let Err(_e) = self.change_name(name) {}
+                }
+            }
+            ExtraServiceEvent::ExtraServiceDescriptionChanged {
                 id, description, ..
             } => {
-                if self.id != id {
-                    return;
+                if self.id == id {
+                    self.change_description(description);
                 }
-                self.description = description;
             }
-            ExtraServiceEvent::PriceChanged { id, price, .. } => {
-                if self.id != id {
-                    return;
+            ExtraServiceEvent::ExtraServicePriceChanged { id, price, .. } => {
+                if self.id == id {
+                    self.change_price(price);
                 }
-                self.price = price;
             }
-            ExtraServiceEvent::Deleted { .. } => {}
+            ExtraServiceEvent::ExtraServiceDeleted { .. } => {}
         }
-        self.events.push(event);
     }
 
     fn events(&self) -> &EventQueue<Self::Event> {
@@ -211,40 +234,21 @@ impl PartialEq for ExtraService {
 
 impl Eq for ExtraService {}
 
+/// オプションサービスエラー
 #[derive(Error, Display, Debug)]
 pub enum ExtraServiceError {
-    #[display(fmt = "Name cannot be empty")]
-    NameIsEmpty,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Price {
-    amount: u64,
-    currency: Currency,
-}
-
-impl Price {
-    pub fn new(amount: u64, currency: Currency) -> Price {
-        Price { amount, currency }
-    }
-}
-
-impl fmt::Display for Price {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.currency {
-            Currency::JPY => write!(f, "¥{}", self.amount.to_formatted_string(&Locale::ja)),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Currency {
-    #[default]
-    JPY,
+    /// IDが一致しません
+    #[display(fmt = "ID does not match")]
+    MismatchedId,
+    /// 名前が空欄です                  
+    #[display(fmt = "Name cannot be blank")]
+    NameIsBlank,
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::core::{Money, Currency};
+
     use super::*;
 
     #[tokio::test]
@@ -253,18 +257,18 @@ mod tests {
             ExtraServiceId(30),
             "AF".to_owned(),
             "アナルセックスを指します。".to_owned(),
-            Price::new(10000, Currency::JPY),
+            Money::new(10000, Currency::JPY),
         )
         .unwrap();
         assert_eq!(service.id(), ExtraServiceId(30));
         assert_eq!(service.name(), "AF");
         assert_eq!(service.description(), "アナルセックスを指します。");
-        assert_eq!(service.price(), &Price::new(10000, Currency::JPY));
+        assert_eq!(service.price(), &Money::new(10000, Currency::JPY));
     }
 
     #[test]
     fn test_price_display() {
-        let price = Price::new(1000000, Currency::JPY);
+        let price = Money::new(1000000, Currency::JPY);
         assert_eq!(format!("{}", price), "¥1,000,000");
     }
 }

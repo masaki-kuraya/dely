@@ -73,7 +73,7 @@ fn from_event<E: Event>(event: E) -> EventData {
     EventData::json(event_type, data).unwrap()
 }
 
-fn try_from_resolved_event<E, I>(value: &ResolvedEvent) -> Result<E, EventConvertError>
+fn try_from_resolved_event<E, I>(value: ResolvedEvent) -> Result<E, EventConvertError>
 where
     E: DeserializeOwned + Event<Id = I>,
     I: Id,

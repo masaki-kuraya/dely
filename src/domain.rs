@@ -1,5 +1,4 @@
 pub mod core;
-pub mod customer;
 
 use derive_more::{Display, From};
 use once_cell::sync;
@@ -18,6 +17,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+/// ID
 pub trait Id:
     Copy
     + Eq
@@ -31,31 +31,46 @@ pub trait Id:
     type Inner: FromStr;
 }
 
+/// イベント
 pub trait Event: Clone + Eq + Debug + Serialize + for<'de> Deserialize<'de> {
+    /// ID
     type Id;
 }
 
+/// エンティティ
 pub trait Entity: Eq + Debug + Default + Clone + Serialize + for<'de> Deserialize<'de> {
+    /// ID
     type Id: Id;
 
+    /// エンティティ名
     const ENTITY_NAME: &'static str;
 
+    /// IDを取得する
     fn id(&self) -> Self::Id;
 }
 
+/// 集約
 pub trait Aggregation: Entity +
     IntoIterator<Item = Self::Event>
 {
+    /// イベント
     type Event: Event<Id = Self::Id>;
+    /// エラー
     type Error: error::Error;
 
+    /// イベントを検証する
     fn validate(&self, event: &Self::Event) -> Result<(), Self::Error>;
+    /// イベントを適用する
     fn apply(&mut self, event: Self::Event);
+    /// イベントを取得する
     fn events(&self) -> &EventQueue<Self::Event>;
+    /// イベントを取得する
     fn events_mut(&mut self) -> &mut EventQueue<Self::Event>;
+    /// 最古のイベントを取り出す
     fn pop(&mut self) -> Option<Self::Event> {
         self.events_mut().pop()
     }
+    /// 全てのイベントを取り出す
     fn pop_all(&mut self) -> Vec<Self::Event> {
         let mut events = Vec::new();
         while let Some(e) = self.pop() {
@@ -63,20 +78,25 @@ pub trait Aggregation: Entity +
         }
         events
     }
+    /// イベントを全てクリアする
     fn clear(&mut self) {
         self.events_mut().clear()
     }
+    /// 最古のイベントを取得する
     fn peek(&self) -> Option<&Self::Event> {
         self.events().peek()
     }
+    /// イテレータを取得する
     fn iter(&self) -> EventQueueIter<'_, Self::Event> {
         self.events().iter()
     }
+    /// イテレータを取得する
     fn iter_mut(&mut self) -> EventQueueIterMut<'_, Self::Event> {
         self.events_mut().iter_mut()
     }
 }
 
+/// データアクセスエラー
 #[derive(Display, Debug)]
 pub enum DataAccessError {
     #[display(fmt = "Database connection error: {}", "_0.to_string()")]
@@ -103,6 +123,7 @@ impl error::Error for DataAccessError {
     }
 }
 
+/// イベントキュー
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventQueue<T> {
     queue: VecDeque<T>,
@@ -152,14 +173,17 @@ pub type EventQueueIntoIter<T> = std::collections::vec_deque::IntoIter<T>;
 pub type EventQueueIter<'a, T> = std::collections::vec_deque::Iter<'a, T>;
 pub type EventQueueIterMut<'a, T> = std::collections::vec_deque::IterMut<'a, T>;
 
+/// IDジェネレータ
 #[derive(From)]
 pub struct IdGenerator(SnowflakeIdGenerator);
 
 impl IdGenerator {
+    /// IDを生成する
     pub fn generate(&mut self) -> u64 {
         self.0.generate() as u64
     }
 
+    /// IDジェネレータを生成する
     pub fn new(gen: SnowflakeIdGenerator) -> Self {
         Self(gen)
     }
@@ -168,6 +192,7 @@ impl IdGenerator {
 pub static ID_GENERATOR: sync::Lazy<IdGeneratorTask> =
     sync::Lazy::new(|| IdGeneratorTask::spawn(SnowflakeIdGenerator::new(1, 1).into()));
 
+/// IDジェネレータタスク
 #[derive(Clone)]
 pub struct IdGeneratorTask {
     _handle: Arc<JoinHandle<()>>,
@@ -175,6 +200,7 @@ pub struct IdGeneratorTask {
 }
 
 impl IdGeneratorTask {
+    /// タスクを生成する
     pub fn spawn(mut gen: IdGenerator) -> Self {
         let (tx_async, mut rx_async) = mpsc::channel::<oneshot::Sender<u64>>(100);
         let handle = tokio::spawn(async move {
@@ -188,6 +214,7 @@ impl IdGeneratorTask {
         }
     }
 
+    /// IDを生成する
     pub async fn generate<T>(&self) -> T
     where
         T: From<u64>,

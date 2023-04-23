@@ -9,13 +9,18 @@ use crate::domain::{Aggregation, DataAccessError, Entity, Event, EventQueue, Id}
 
 use super::MediaId;
 
+/// 女の子リポジトリ
 #[async_trait]
 pub trait ProstituteRepository {
+    /// IDで女の子を検索する
     async fn find_by_id(&self, id: ProstituteId) -> Result<Option<Prostitute>, DataAccessError>;
+    /// 女の子を保存する
     async fn save(&mut self, entity: &mut Prostitute) -> Result<bool, DataAccessError>;
+    /// 女の子を削除する
     async fn delete(&mut self, entity: &mut Prostitute) -> Result<bool, DataAccessError>;
 }
 
+/// 女の子ID
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display, From, Deref, Default,
 )]
@@ -25,8 +30,10 @@ impl Id for ProstituteId {
     type Inner = u64;
 }
 
+/// 女の子イベント
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProstituteEvent {
+    /// 女の子が新規登録された
     ProstituteJoined {
         id: ProstituteId,
         name: String,
@@ -40,100 +47,105 @@ pub enum ProstituteEvent {
         images: Vec<MediaId>,
         video: Option<MediaId>,
     },
-    ProstituteRejoined {
-        id: ProstituteId,
-    },
-    ProstituteLeaved {
-        id: ProstituteId,
-    },
-    NameChanged {
-        id: ProstituteId,
-        name: String,
-    },
-    CatchphraseChanged {
+    /// 女の子が再登録した
+    ProstituteRejoined { id: ProstituteId },
+    /// 女の子が退職した
+    ProstituteLeaved { id: ProstituteId },
+    /// 女の子の名前が変更された
+    ProstituteExtraServiceNameChanged { id: ProstituteId, name: String },
+    /// 女の子のキャッチフレーズが変更された
+    ProstituteCatchphraseChanged {
         id: ProstituteId,
         catchphrase: String,
     },
-    ProfileChanged {
-        id: ProstituteId,
-        profile: String,
-    },
-    MessageChanged {
-        id: ProstituteId,
-        message: String,
-    },
-    FigureChanged {
-        id: ProstituteId,
-        figure: Figure,
-    },
-    BloodTypeChanged {
+    /// 女の子のプロフィールが変更された
+    ProstituteProfileChanged { id: ProstituteId, profile: String },
+    /// 女の子のメッセージが変更された
+    ProstituteMessageChanged { id: ProstituteId, message: String },
+    /// 女の子の体型が変更された
+    ProstituteFigureChanged { id: ProstituteId, figure: Figure },
+    /// 女の子の血液型が変更された
+    ProstituteBloodTypeChanged {
         id: ProstituteId,
         blood: Option<BloodType>,
     },
-    BirthdayChanged {
+    /// 女の子の誕生日が変更された
+    ProstituteBirthdayChanged {
         id: ProstituteId,
         birthday: Option<Birthday>,
     },
-    QuestionsChanged {
+    /// 女の子の質問が変更された
+    ProstituteQuestionsChanged {
         id: ProstituteId,
         questions: Vec<Question>,
     },
-    QuestionAdded {
+    /// 女の子の質問が追加された
+    ProstituteQuestionAdded {
         id: ProstituteId,
         question: Question,
     },
-    QuestionDeleted {
-        id: ProstituteId,
-        index: usize,
-    },
-    QuestionSwapped {
+    /// 女の子の質問が削除された
+    ProstituteQuestionDeleted { id: ProstituteId, index: usize },
+    /// 女の子の質問が入れ替わった
+    ProstituteQuestionSwapped {
         id: ProstituteId,
         index_a: usize,
         index_b: usize,
     },
-    ImagesChanged {
+    /// 女の子の画像が変更された
+    ProstituteImagesChanged {
         id: ProstituteId,
         media_ids: Vec<MediaId>,
     },
-    ImageAdded {
-        id: ProstituteId,
-        media_id: MediaId,
-    },
-    ImageDeleted {
-        id: ProstituteId,
-        media_id: MediaId,
-    },
-    ImageSwapped {
+    /// 女の子の画像が追加された
+    ProstituteImageAdded { id: ProstituteId, media_id: MediaId },
+    /// 女の子の画像が削除された
+    ProstituteImageDeleted { id: ProstituteId, media_id: MediaId },
+    /// 女の子の画像が入れ替わった
+    ProstituteImageSwapped {
         id: ProstituteId,
         media_id_a: MediaId,
         media_id_b: MediaId,
     },
-    VideoChanged {
+    /// 女の子の動画が変更された
+    ProstituteVideoChanged {
         id: ProstituteId,
         media_id: Option<MediaId>,
     },
-    ProstituteDeleted {
-        id: ProstituteId,
-    },
+    /// 女の子が削除された
+    ProstituteDeleted { id: ProstituteId },
 }
 
 impl Event for ProstituteEvent {
     type Id = ProstituteId;
 }
 
+/// 女の子エンティティ
 #[derive(Clone, Default, Debug, IntoIterator, Serialize, Deserialize)]
 pub struct Prostitute {
+    /// ID
     id: ProstituteId,
+    /// 名前
     name: String,
+    /// キャッチフレーズ
     catchphrase: String,
+    /// プロフィール
     profile: String,
+    /// メッセージ
     message: String,
+    /// 体型
     figure: Figure,
+    /// 血液型
     blood: Option<BloodType>,
+    /// 誕生日
     birthday: Option<Birthday>,
+    /// 質問
     questions: Vec<Question>,
+    /// 画像
     images: Vec<MediaId>,
+    /// 動画
     video: Option<MediaId>,
+    /// 退職済みか
     leaved: bool,
     #[serde(skip)]
     #[into_iterator]
@@ -205,23 +217,24 @@ impl Prostitute {
         Self::validate_name(&name)?;
         self.name = name.clone();
         self.events
-            .push(ProstituteEvent::NameChanged { id: self.id, name });
+            .push(ProstituteEvent::ProstituteExtraServiceNameChanged { id: self.id, name });
         Ok(())
     }
 
     pub fn change_catchphrase(&mut self, catchphrase: String) -> Result<(), ProstituteError> {
         Self::validate_catchphrase(&catchphrase)?;
         self.catchphrase = catchphrase.clone();
-        self.events.push(ProstituteEvent::CatchphraseChanged {
-            id: self.id,
-            catchphrase,
-        });
+        self.events
+            .push(ProstituteEvent::ProstituteCatchphraseChanged {
+                id: self.id,
+                catchphrase,
+            });
         Ok(())
     }
 
     pub fn change_profile(&mut self, profile: String) {
         self.profile = profile.clone();
-        self.events.push(ProstituteEvent::ProfileChanged {
+        self.events.push(ProstituteEvent::ProstituteProfileChanged {
             id: self.id,
             profile,
         })
@@ -229,7 +242,7 @@ impl Prostitute {
 
     pub fn change_message(&mut self, message: String) {
         self.message = message.clone();
-        self.events.push(ProstituteEvent::MessageChanged {
+        self.events.push(ProstituteEvent::ProstituteMessageChanged {
             id: self.id,
             message,
         })
@@ -237,7 +250,7 @@ impl Prostitute {
 
     pub fn change_figure(&mut self, figure: Figure) {
         self.figure = figure.clone();
-        self.events.push(ProstituteEvent::FigureChanged {
+        self.events.push(ProstituteEvent::ProstituteFigureChanged {
             id: self.id,
             figure,
         })
@@ -246,55 +259,58 @@ impl Prostitute {
     pub fn change_blood_type(&mut self, blood: Option<BloodType>) {
         self.blood = blood;
         self.events
-            .push(ProstituteEvent::BloodTypeChanged { id: self.id, blood })
+            .push(ProstituteEvent::ProstituteBloodTypeChanged { id: self.id, blood })
     }
 
     pub fn change_birthday(&mut self, birthday: Option<Birthday>) {
         self.birthday = birthday.clone();
-        self.events.push(ProstituteEvent::BirthdayChanged {
-            id: self.id,
-            birthday,
-        })
+        self.events
+            .push(ProstituteEvent::ProstituteBirthdayChanged {
+                id: self.id,
+                birthday,
+            })
     }
 
     pub fn change_questions(&mut self, questions: Vec<Question>) {
         self.questions = questions.clone();
-        self.events.push(ProstituteEvent::QuestionsChanged {
-            id: self.id,
-            questions,
-        })
+        self.events
+            .push(ProstituteEvent::ProstituteQuestionsChanged {
+                id: self.id,
+                questions,
+            })
     }
 
     pub fn add_question(&mut self, question: Question) {
         self.questions.push(question.clone());
-        self.events.push(ProstituteEvent::QuestionAdded {
+        self.events.push(ProstituteEvent::ProstituteQuestionAdded {
             id: self.id,
             question,
         })
     }
 
     pub fn delete_question(&mut self, index: usize) -> Result<(), ProstituteError> {
-        self.validate_question_delete(&index)?;
+        self.validate_question_deleted(&index)?;
         self.questions.remove(index);
         self.events
-            .push(ProstituteEvent::QuestionDeleted { id: self.id, index });
+            .push(ProstituteEvent::ProstituteQuestionDeleted { id: self.id, index });
         Ok(())
     }
 
     pub fn swap_question(&mut self, index_a: usize, index_b: usize) -> Result<(), ProstituteError> {
         self.validate_question_swapped(&index_a, &index_b)?;
         self.questions.swap(index_a, index_b);
-        self.events.push(ProstituteEvent::QuestionSwapped {
-            id: self.id,
-            index_a,
-            index_b,
-        });
+        self.events
+            .push(ProstituteEvent::ProstituteQuestionSwapped {
+                id: self.id,
+                index_a,
+                index_b,
+            });
         Ok(())
     }
 
     pub fn change_images(&mut self, media_ids: Vec<MediaId>) {
         self.images = media_ids.clone();
-        self.events.push(ProstituteEvent::ImagesChanged {
+        self.events.push(ProstituteEvent::ProstituteImagesChanged {
             id: self.id,
             media_ids,
         });
@@ -303,7 +319,7 @@ impl Prostitute {
     pub fn add_image(&mut self, media_id: MediaId) -> Result<(), ProstituteError> {
         self.validate_image_added(&media_id)?;
         self.images.push(media_id);
-        self.events.push(ProstituteEvent::ImageAdded {
+        self.events.push(ProstituteEvent::ProstituteImageAdded {
             id: self.id,
             media_id,
         });
@@ -313,7 +329,7 @@ impl Prostitute {
     pub fn delete_image(&mut self, media_id: MediaId) -> Result<(), ProstituteError> {
         self.validate_image_deleted(&media_id)?;
         self.images.retain(|&m| m != media_id);
-        self.events.push(ProstituteEvent::ImageDeleted {
+        self.events.push(ProstituteEvent::ProstituteImageDeleted {
             id: self.id,
             media_id,
         });
@@ -333,7 +349,7 @@ impl Prostitute {
                 *x = media_id_a
             }
         });
-        self.events.push(ProstituteEvent::ImageSwapped {
+        self.events.push(ProstituteEvent::ProstituteImageSwapped {
             id: self.id,
             media_id_a,
             media_id_b,
@@ -342,7 +358,7 @@ impl Prostitute {
     }
 
     pub fn change_video(&mut self, video: Option<MediaId>) {
-        let event = ProstituteEvent::VideoChanged {
+        let event = ProstituteEvent::ProstituteVideoChanged {
             id: self.id,
             media_id: video,
         };
@@ -399,7 +415,7 @@ impl Prostitute {
         }
     }
 
-    fn validate_question_delete(&self, index: &usize) -> Result<(), ProstituteError> {
+    fn validate_question_deleted(&self, index: &usize) -> Result<(), ProstituteError> {
         self.validate_question_not_found(index)
     }
 
@@ -486,26 +502,26 @@ impl Aggregation for Prostitute {
                 self.validate_id(id)?;
                 self.validate_leaved()
             }
-            ProstituteEvent::NameChanged { id, name } => {
+            ProstituteEvent::ProstituteExtraServiceNameChanged { id, name } => {
                 self.validate_id(id)?;
                 Self::validate_name(name)
             }
-            ProstituteEvent::CatchphraseChanged { id, catchphrase } => {
+            ProstituteEvent::ProstituteCatchphraseChanged { id, catchphrase } => {
                 self.validate_id(id)?;
                 Self::validate_catchphrase(catchphrase)
             }
-            ProstituteEvent::ProfileChanged { id, .. }
-            | ProstituteEvent::MessageChanged { id, .. }
-            | ProstituteEvent::FigureChanged { id, .. }
-            | ProstituteEvent::BloodTypeChanged { id, .. }
-            | ProstituteEvent::BirthdayChanged { id, .. }
-            | ProstituteEvent::QuestionsChanged { id, .. }
-            | ProstituteEvent::QuestionAdded { id, .. } => self.validate_id(id),
-            ProstituteEvent::QuestionDeleted { id, index } => {
+            ProstituteEvent::ProstituteProfileChanged { id, .. }
+            | ProstituteEvent::ProstituteMessageChanged { id, .. }
+            | ProstituteEvent::ProstituteFigureChanged { id, .. }
+            | ProstituteEvent::ProstituteBloodTypeChanged { id, .. }
+            | ProstituteEvent::ProstituteBirthdayChanged { id, .. }
+            | ProstituteEvent::ProstituteQuestionsChanged { id, .. }
+            | ProstituteEvent::ProstituteQuestionAdded { id, .. } => self.validate_id(id),
+            ProstituteEvent::ProstituteQuestionDeleted { id, index } => {
                 self.validate_id(id)?;
-                self.validate_question_delete(index)
+                self.validate_question_deleted(index)
             }
-            ProstituteEvent::QuestionSwapped {
+            ProstituteEvent::ProstituteQuestionSwapped {
                 id,
                 index_a,
                 index_b,
@@ -513,16 +529,16 @@ impl Aggregation for Prostitute {
                 self.validate_id(id)?;
                 self.validate_question_swapped(index_a, index_b)
             }
-            ProstituteEvent::ImagesChanged { id, .. } => self.validate_id(id),
-            ProstituteEvent::ImageAdded { id, media_id } => {
+            ProstituteEvent::ProstituteImagesChanged { id, .. } => self.validate_id(id),
+            ProstituteEvent::ProstituteImageAdded { id, media_id } => {
                 self.validate_id(id)?;
                 self.validate_image_added(media_id)
             }
-            ProstituteEvent::ImageDeleted { id, media_id } => {
+            ProstituteEvent::ProstituteImageDeleted { id, media_id } => {
                 self.validate_id(id)?;
                 self.validate_image_deleted(media_id)
             }
-            ProstituteEvent::ImageSwapped {
+            ProstituteEvent::ProstituteImageSwapped {
                 id,
                 media_id_a,
                 media_id_b,
@@ -530,7 +546,7 @@ impl Aggregation for Prostitute {
                 self.validate_id(id)?;
                 self.validate_image_swapped(media_id_a, media_id_b)
             }
-            ProstituteEvent::VideoChanged { id, .. }
+            ProstituteEvent::ProstituteVideoChanged { id, .. }
             | ProstituteEvent::ProstituteDeleted { id, .. } => self.validate_id(id),
         }
     }
@@ -550,7 +566,7 @@ impl Aggregation for Prostitute {
                 images,
                 video,
             } => {
-                if self.id == id {
+                if self.id != id {
                     if let Ok(entity) = Self::join(
                         id,
                         name,
@@ -578,57 +594,57 @@ impl Aggregation for Prostitute {
                     if let Err(_e) = self.leave() {}
                 }
             }
-            ProstituteEvent::NameChanged { id, name } => {
+            ProstituteEvent::ProstituteExtraServiceNameChanged { id, name } => {
                 if self.id == id {
                     if let Err(_e) = self.change_name(name) {}
                 }
             }
-            ProstituteEvent::CatchphraseChanged { id, catchphrase } => {
+            ProstituteEvent::ProstituteCatchphraseChanged { id, catchphrase } => {
                 if self.id == id {
                     if let Err(_e) = self.change_catchphrase(catchphrase) {}
                 }
             }
-            ProstituteEvent::ProfileChanged { id, profile } => {
+            ProstituteEvent::ProstituteProfileChanged { id, profile } => {
                 if self.id == id {
                     self.change_profile(profile);
                 }
             }
-            ProstituteEvent::MessageChanged { id, message } => {
+            ProstituteEvent::ProstituteMessageChanged { id, message } => {
                 if self.id == id {
                     self.change_message(message)
                 }
             }
-            ProstituteEvent::FigureChanged { id, figure } => {
+            ProstituteEvent::ProstituteFigureChanged { id, figure } => {
                 if self.id == id {
                     self.change_figure(figure)
                 }
             }
-            ProstituteEvent::BloodTypeChanged { id, blood } => {
+            ProstituteEvent::ProstituteBloodTypeChanged { id, blood } => {
                 if self.id == id {
                     self.change_blood_type(blood)
                 }
             }
-            ProstituteEvent::BirthdayChanged { id, birthday } => {
+            ProstituteEvent::ProstituteBirthdayChanged { id, birthday } => {
                 if self.id == id {
                     self.change_birthday(birthday)
                 }
             }
-            ProstituteEvent::QuestionsChanged { id, questions } => {
+            ProstituteEvent::ProstituteQuestionsChanged { id, questions } => {
                 if self.id == id {
                     self.change_questions(questions)
                 }
             }
-            ProstituteEvent::QuestionAdded { id, question } => {
+            ProstituteEvent::ProstituteQuestionAdded { id, question } => {
                 if self.id == id {
                     self.add_question(question)
                 }
             }
-            ProstituteEvent::QuestionDeleted { id, index } => {
+            ProstituteEvent::ProstituteQuestionDeleted { id, index } => {
                 if self.id == id {
                     if let Err(_e) = self.delete_question(index) {}
                 }
             }
-            ProstituteEvent::QuestionSwapped {
+            ProstituteEvent::ProstituteQuestionSwapped {
                 id,
                 index_a,
                 index_b,
@@ -637,22 +653,22 @@ impl Aggregation for Prostitute {
                     if let Err(_e) = self.swap_question(index_a, index_b) {}
                 }
             }
-            ProstituteEvent::ImagesChanged { id, media_ids } => {
+            ProstituteEvent::ProstituteImagesChanged { id, media_ids } => {
                 if self.id == id {
                     self.change_images(media_ids)
                 }
             }
-            ProstituteEvent::ImageAdded { id, media_id } => {
+            ProstituteEvent::ProstituteImageAdded { id, media_id } => {
                 if self.id == id {
                     if let Err(_e) = self.add_image(media_id) {}
                 }
             }
-            ProstituteEvent::ImageDeleted { id, media_id } => {
+            ProstituteEvent::ProstituteImageDeleted { id, media_id } => {
                 if self.id == id {
                     if let Err(_e) = self.delete_image(media_id) {}
                 }
             }
-            ProstituteEvent::ImageSwapped {
+            ProstituteEvent::ProstituteImageSwapped {
                 id,
                 media_id_a,
                 media_id_b,
@@ -661,7 +677,7 @@ impl Aggregation for Prostitute {
                     if let Err(_e) = self.swap_image(media_id_a, media_id_b) {}
                 }
             }
-            ProstituteEvent::VideoChanged { id, media_id } => {
+            ProstituteEvent::ProstituteVideoChanged { id, media_id } => {
                 if self.id == id {
                     self.change_video(media_id)
                 }
@@ -698,6 +714,7 @@ impl PartialEq for Prostitute {
 
 impl Eq for Prostitute {}
 
+/// 女の子エラー
 #[derive(Error, Display, Debug)]
 pub enum ProstituteError {
     /// IDが一致しません
@@ -743,7 +760,7 @@ pub struct Figure {
 
 impl Figure {
     pub fn bmi(&self) -> Option<f32> {
-        let fn_bmi = |(weight, height): (f32, f32)| weight / height.powi(2);
+        let fn_bmi = |(weight, height): (f32, f32)| weight / (height / 100.0).powi(2);
         self.weight
             .map(f32::from)
             .zip(self.height.map(f32::from))
@@ -767,7 +784,7 @@ impl Figure {
                 result.push(FigureType::Tall);
             }
             if let Some(v) = &self.vital_statistics {
-                if v.bust.top > h * 58 / 100 && v.waist < h * 41 / 100 && v.hip > h * 58 / 100 {
+                if v.bust.top > h * 59 / 100 && v.waist < h * 43 / 100 && v.hip > h * 58 / 100 {
                     result.push(FigureType::Voluptuous);
                 }
             }
@@ -819,8 +836,8 @@ pub enum FigureType {
 /// スリーサイズ
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VitalStatistics {
-    pub waist: u16,
     pub bust: Bust,
+    pub waist: u16,
     pub hip: u16,
 }
 
@@ -915,6 +932,7 @@ pub enum BloodType {
     AB,
 }
 
+/// 誕生日
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Debug, Serialize, Deserialize)]
 pub struct Birthday(NaiveDate);
 
@@ -936,6 +954,7 @@ impl Birthday {
     }
 }
 
+/// 質問
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
     pub question: String,
@@ -947,10 +966,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_figure_figure_type() {
+        let figure = Figure {
+            vital_statistics: Some(VitalStatistics {
+                bust: Bust {
+                    top: 98,
+                    under: Some(80),
+                },
+                waist: 71,
+                hip: 98,
+            }),
+            cup_size: None,
+            height: Some(168),
+            weight: Some(60),
+        };
+        assert_eq!(figure.figure_type(), vec![FigureType::Tall, FigureType::Voluptuous]);
+    }
+
+    #[test]
     fn test_cup_size_from() {
         assert_eq!(CupSize::new(88, 65), CupSize::F);
         assert_eq!(CupSize::new(89, 65), CupSize::G);
         assert_eq!(CupSize::new(91, 65), CupSize::G);
         assert_eq!(CupSize::new(92, 65), CupSize::H);
+        assert_eq!(CupSize::new(98, 80), CupSize::D);
     }
 }

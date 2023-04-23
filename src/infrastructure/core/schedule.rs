@@ -34,7 +34,7 @@ impl ScheduleRepository for EventStoreScheduleRepository {
                 let mut entity = Schedule::default();
                 loop {
                     match stream.next().await {
-                        Ok(Some(e)) => entity.apply(TryFrom::try_from(&e)?),
+                        Ok(Some(e)) => entity.apply(TryFrom::try_from(e)?),
                         Ok(_) => break,
                         Err(eventstore::Error::ResourceDeleted) => return Ok(None),
                         Err(eventstore::Error::ResourceNotFound) => return Ok(None),
@@ -93,10 +93,10 @@ impl From<ScheduleEvent> for EventData {
     }
 }
 
-impl TryFrom<&ResolvedEvent> for ScheduleEvent {
+impl TryFrom<ResolvedEvent> for ScheduleEvent {
     type Error = EventConvertError;
 
-    fn try_from(value: &ResolvedEvent) -> Result<Self, Self::Error> {
+    fn try_from(value: ResolvedEvent) -> Result<Self, Self::Error> {
         try_from_resolved_event(value)
     }
 }

@@ -10,7 +10,7 @@ use crate::domain::{Aggregation, DataAccessError, Entity, Event, EventQueue, Id}
 
 use super::ProstituteId;
 
-/// スケジュールのリポジトリトレイト
+/// スケジュールリポジトリ
 #[async_trait]
 pub trait ScheduleRepository {
     /// IDからスケジュールを取得する
@@ -21,7 +21,7 @@ pub trait ScheduleRepository {
     async fn delete(&mut self, entity: &mut Schedule) -> Result<bool, DataAccessError>;
 }
 
-/// スケジュールのID
+/// スケジュールID
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display, From, Deref, Default,
 )]
@@ -31,7 +31,7 @@ impl Id for ScheduleId {
     type Inner = u64;
 }
 
-/// スケジュールのイベント
+/// スケジュールイベント
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScheduleEvent {
     /// スケジュールが作成された
@@ -42,25 +42,26 @@ pub enum ScheduleEvent {
     /// スケジュールが削除された
     ScheduleDeleted { id: ScheduleId },
     /// スケジュールにシフトが追加された
-    ShiftAdded { id: ScheduleId, shift: Shift },
+    ScheduleShiftAdded { id: ScheduleId, shift: Shift },
     /// シフトの時間範囲が変更された
-    ShiftTimeChanged {
+    ScheduleShiftTimeChanged {
         shift_id: ShiftId,
         time: Range<DateTime<Utc>>,
     },
     /// シフトのステータスが変更された
-    ShiftStatusChanged {
+    ScheduleShiftStatusChanged {
         shift_id: ShiftId,
         status: ShiftStatus,
     },
     /// シフトが削除された
-    ShiftsDeleted { shift_ids: Vec<ShiftId> },
+    ScheduleShiftsDeleted { shift_ids: Vec<ShiftId> },
 }
 
 impl Event for ScheduleEvent {
     type Id = ScheduleId;
 }
 
+/// スケジュールエンティティ
 #[derive(Debug, Clone, Default, IntoIterator, Serialize, Deserialize)]
 pub struct Schedule {
     id: ScheduleId,
@@ -88,7 +89,7 @@ impl Schedule {
         self.validate_shift_added(&shift)?;
         self.shifts.push(shift.clone());
         self.events
-            .push(ScheduleEvent::ShiftAdded { id: self.id, shift });
+            .push(ScheduleEvent::ScheduleShiftAdded { id: self.id, shift });
         Ok(())
     }
 
@@ -103,7 +104,7 @@ impl Schedule {
             .filter(|s| s.id == shift_id)
             .for_each(|s| if let Err(_) = s.change_time(time.clone()) {});
         self.events
-            .push(ScheduleEvent::ShiftTimeChanged { shift_id, time });
+            .push(ScheduleEvent::ScheduleShiftTimeChanged { shift_id, time });
         Ok(())
     }
 
@@ -118,7 +119,7 @@ impl Schedule {
             .filter(|s| s.id == shift_id)
             .for_each(|s| if let Err(_) = s.change_status(status) {});
         self.events
-            .push(ScheduleEvent::ShiftStatusChanged { shift_id, status });
+            .push(ScheduleEvent::ScheduleShiftStatusChanged { shift_id, status });
         Ok(())
     }
 
@@ -129,7 +130,7 @@ impl Schedule {
         let shift_ids = shift_ids.into_iter().collect::<Vec<_>>();
         self.validate_shifts_deleted(&shift_ids)?;
         self.shifts.retain(|shift| shift_ids.contains(&shift.id));
-        self.events.push(ScheduleEvent::ShiftsDeleted { shift_ids });
+        self.events.push(ScheduleEvent::ScheduleShiftsDeleted { shift_ids });
         Ok(())
     }
 
@@ -228,17 +229,17 @@ impl Aggregation for Schedule {
         match event {
             ScheduleEvent::ScheduleCreated { .. } => Ok(()),
             ScheduleEvent::ScheduleDeleted { id } => self.validate_id(id),
-            ScheduleEvent::ShiftAdded { id, shift } => {
+            ScheduleEvent::ScheduleShiftAdded { id, shift } => {
                 self.validate_id(id)?;
                 self.validate_shift_added(shift)
             }
-            ScheduleEvent::ShiftTimeChanged { shift_id, time } => {
+            ScheduleEvent::ScheduleShiftTimeChanged { shift_id, time } => {
                 self.validate_shift_time_changed(shift_id, time)
             }
-            ScheduleEvent::ShiftStatusChanged { shift_id, status } => {
+            ScheduleEvent::ScheduleShiftStatusChanged { shift_id, status } => {
                 self.validate_shift_status_changed(shift_id, status)
             }
-            ScheduleEvent::ShiftsDeleted { shift_ids } => self.validate_shifts_deleted(shift_ids),
+            ScheduleEvent::ScheduleShiftsDeleted { shift_ids } => self.validate_shifts_deleted(shift_ids),
         }
     }
 
@@ -250,18 +251,18 @@ impl Aggregation for Schedule {
                 }
             }
             ScheduleEvent::ScheduleDeleted { .. } => {}
-            ScheduleEvent::ShiftAdded { id, shift } => {
+            ScheduleEvent::ScheduleShiftAdded { id, shift } => {
                 if self.id == id {
                     if let Err(_e) = self.add_shift(shift) {}
                 }
             }
-            ScheduleEvent::ShiftTimeChanged { shift_id, time } => {
+            ScheduleEvent::ScheduleShiftTimeChanged { shift_id, time } => {
                 if let Err(_e) = self.change_shift_time(shift_id, time) {}
             }
-            ScheduleEvent::ShiftStatusChanged { shift_id, status } => {
+            ScheduleEvent::ScheduleShiftStatusChanged { shift_id, status } => {
                 if let Err(_e) = self.change_shift_status(shift_id, status) {}
             }
-            ScheduleEvent::ShiftsDeleted { shift_ids } => {
+            ScheduleEvent::ScheduleShiftsDeleted { shift_ids } => {
                 if let Err(_e) = self.delete_shifts(shift_ids) {}
             }
         }
@@ -286,6 +287,7 @@ impl PartialEq for Schedule {
 
 impl Eq for Schedule {}
 
+/// スケジュールエラー
 #[derive(Error, Display, Debug, From)]
 pub enum ScheduleError {
     #[display(fmt = "Mismatched id")]
@@ -300,6 +302,7 @@ pub enum ScheduleError {
     ShiftError(ShiftError),
 }
 
+/// シフトID
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Display, From, Deref, Default, Hash,
 )]
@@ -309,6 +312,7 @@ impl Id for ShiftId {
     type Inner = u64;
 }
 
+/// シフトエンティティ
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Hash)]
 pub struct Shift {
     id: ShiftId,
@@ -339,8 +343,8 @@ impl Shift {
         Ok(())
     }
 
-    pub fn time(&self) -> Range<DateTime<Utc>> {
-        self.time.clone()
+    pub fn time(&self) -> &Range<DateTime<Utc>> {
+        &self.time
     }
 
     pub fn status(&self) -> ShiftStatus {
@@ -389,17 +393,22 @@ impl Entity for Shift {
     }
 }
 
+/// シフトエラー
 #[derive(Error, Display, Debug)]
 pub enum ShiftError {
+    /// 無効な時間
     #[display(fmt = "Invalid duration")]
     InvalidDuration,
+    /// 無効なステータス遷移
     #[display(fmt = "Invalid status transition")]
     InvalidStatusTransition,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+/// シフトステータス
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum ShiftStatus {
     /// 編集中
+    #[default]
     Editing,
     /// 確認中
     Reviewing,
@@ -407,10 +416,4 @@ pub enum ShiftStatus {
     Confirmed,
     /// キャンセル
     Canceled,
-}
-
-impl Default for ShiftStatus {
-    fn default() -> Self {
-        ShiftStatus::Editing
-    }
 }

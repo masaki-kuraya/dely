@@ -1,3 +1,4 @@
+// mod customer;
 mod extra_service;
 mod media;
 mod prostitute;
@@ -7,9 +8,10 @@ use eventstore::ResolvedEvent;
 
 use crate::domain::{
     core::{CoreEvent, ExtraService, Media, Prostitute, Schedule},
-    Entity,
+     Entity,
 };
 
+// pub use self::customer::*;
 pub use self::extra_service::*;
 pub use self::media::*;
 pub use self::prostitute::*;
@@ -17,10 +19,10 @@ pub use self::schedule::*;
 
 use super::EventConvertError;
 
-impl TryFrom<&ResolvedEvent> for CoreEvent {
+impl TryFrom<ResolvedEvent> for CoreEvent {
     type Error = EventConvertError;
 
-    fn try_from(value: &ResolvedEvent) -> Result<Self, Self::Error> {
+    fn try_from(value: ResolvedEvent) -> Result<Self, Self::Error> {
         let x = value
             .get_original_stream_id()
             .split("-")

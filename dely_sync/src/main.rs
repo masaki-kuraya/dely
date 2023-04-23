@@ -71,31 +71,31 @@ async fn subscribe(config: &DelyConfig) -> Result<(), Box<dyn Error>> {
     loop {
         match sub.next().await {
             Ok(resolved) => {
-                if let Ok(core_event) = CoreEvent::try_from(&resolved) {
-                    info!("ドメインイベントを受信: {:?}", core_event);
+                let event = resolved.get_original_event();
+                let event_id = event.id;
+                let position = event.position;
+                if let Ok(core_event) = CoreEvent::try_from(resolved) {
+                    info!("イベントを受信: {:?}", core_event);
                     if let Err(e) = client.execute(core_event).await {
                         error!("イベント実行エラー: {}", e);
                         continue;
                     }
-                } else {
-                    info!("システムイベントを受信: {:?}", resolved);
                 }
-                let event = resolved.get_original_event();
                 if let Err(e) = client
                     .meilisearch
                     .index(VSERSION_UID)
                     .add_documents(
                         &[EventstoreVersion {
                             id: 1,
-                            event_id: event.id,
-                            position: event.position,
+                            event_id,
+                            position,
                         }],
                         Some("id"),
                     )
                     .await
                 {
                     error!("バージョン情報保存失敗: {}", e);
-                    // TODO: バージョン情報をローカルに保存する等必要
+                    todo!("バージョン情報をローカルに保存する等必要")
                 }
             }
             Err(e) => return Err(Box::new(e)),
@@ -152,7 +152,7 @@ impl Execute<ExtraServiceEvent> for Client {
     async fn execute(&mut self, event: ExtraServiceEvent) -> Result<(), Self::Error> {
         let index = self.meilisearch.index(ExtraService::ENTITY_NAME);
         let task = match event {
-            ExtraServiceEvent::Created {
+            ExtraServiceEvent::ExtraServiceCreated {
                 id,
                 name,
                 description,
@@ -165,12 +165,12 @@ impl Execute<ExtraServiceEvent> for Client {
                     return Ok(());
                 }
             }
-            ExtraServiceEvent::NameChanged { .. }
-            | ExtraServiceEvent::DescriptionChanged { .. }
-            | ExtraServiceEvent::PriceChanged { .. } => {
+            ExtraServiceEvent::ExtraServiceNameChanged { .. }
+            | ExtraServiceEvent::ExtraServiceDescriptionChanged { .. }
+            | ExtraServiceEvent::ExtraServicePriceChanged { .. } => {
                 index.add_or_update(&[event], Some("id")).await?
             }
-            ExtraServiceEvent::Deleted { id } => index.delete_document(id).await?,
+            ExtraServiceEvent::ExtraServiceDeleted { id } => index.delete_document(id).await?,
         };
         self.task_info = Some(task);
         Ok(())
@@ -183,15 +183,15 @@ impl Execute<MediaEvent> for Client {
     async fn execute(&mut self, event: MediaEvent) -> Result<(), Self::Error> {
         let index = self.meilisearch.index(Media::ENTITY_NAME);
         let task = match event {
-            MediaEvent::Created { id, mime, data } => {
-                if let Ok(entity) = Media::create(id, mime, data) {
+            MediaEvent::MediaCreated { id, data, .. } => {
+                if let Ok(entity) = Media::create(id, data) {
                     index.add_documents(&[entity], Some("id")).await?
                 } else {
                     warn!("不正なエンティティの登録をスキップしました");
                     return Ok(());
                 }
             }
-            MediaEvent::Deleted { id } => index.delete_document(id).await?,
+            MediaEvent::MediaDeleted { id } => index.delete_document(id).await?,
         };
         self.task_info = Some(task);
         Ok(())
@@ -247,24 +247,24 @@ impl Execute<ProstituteEvent> for Client {
                     .add_or_update(&[json!({"id": id, "leaved": true})], Some("id"))
                     .await?
             }
-            ProstituteEvent::NameChanged { .. }
-            | ProstituteEvent::CatchphraseChanged { .. }
-            | ProstituteEvent::ProfileChanged { .. }
-            | ProstituteEvent::MessageChanged { .. }
-            | ProstituteEvent::FigureChanged { .. }
-            | ProstituteEvent::BloodTypeChanged { .. }
-            | ProstituteEvent::BirthdayChanged { .. }
-            | ProstituteEvent::QuestionsChanged { .. }
-            | ProstituteEvent::ImagesChanged { .. }
-            | ProstituteEvent::VideoChanged { .. } => {
+            ProstituteEvent::ProstituteExtraServiceNameChanged { .. }
+            | ProstituteEvent::ProstituteCatchphraseChanged { .. }
+            | ProstituteEvent::ProstituteProfileChanged { .. }
+            | ProstituteEvent::ProstituteMessageChanged { .. }
+            | ProstituteEvent::ProstituteFigureChanged { .. }
+            | ProstituteEvent::ProstituteBloodTypeChanged { .. }
+            | ProstituteEvent::ProstituteBirthdayChanged { .. }
+            | ProstituteEvent::ProstituteQuestionsChanged { .. }
+            | ProstituteEvent::ProstituteImagesChanged { .. }
+            | ProstituteEvent::ProstituteVideoChanged { .. } => {
                 index.add_or_update(&[event], Some("id")).await?
             }
-            ProstituteEvent::QuestionAdded { id, .. }
-            | ProstituteEvent::QuestionDeleted { id, .. }
-            | ProstituteEvent::QuestionSwapped { id, .. }
-            | ProstituteEvent::ImageAdded { id, .. }
-            | ProstituteEvent::ImageDeleted { id, .. }
-            | ProstituteEvent::ImageSwapped { id, .. } => {
+            ProstituteEvent::ProstituteQuestionAdded { id, .. }
+            | ProstituteEvent::ProstituteQuestionDeleted { id, .. }
+            | ProstituteEvent::ProstituteQuestionSwapped { id, .. }
+            | ProstituteEvent::ProstituteImageAdded { id, .. }
+            | ProstituteEvent::ProstituteImageDeleted { id, .. }
+            | ProstituteEvent::ProstituteImageSwapped { id, .. } => {
                 self.wait_for_completion().await?;
                 let mut entity = index.get_document::<Prostitute>(&id.to_string()).await?;
                 entity.apply(event);
@@ -304,20 +304,20 @@ impl Execute<ScheduleEvent> for Client {
                     .await?
             }
             ScheduleEvent::ScheduleDeleted { id } => index_schedule.delete_document(id).await?,
-            ScheduleEvent::ShiftAdded { id, shift } => {
+            ScheduleEvent::ScheduleShiftAdded { id, shift } => {
                 index_shift
                     .add_documents(
                         &[MeiliShift {
                             id: shift.id(),
                             schedule_id: Some(id),
-                            time: Some(shift.time()),
+                            time: Some(shift.time().clone()),
                             status: Some(shift.status()),
                         }],
                         Some("id"),
                     )
                     .await?
             }
-            ScheduleEvent::ShiftTimeChanged { shift_id, time } => {
+            ScheduleEvent::ScheduleShiftTimeChanged { shift_id, time } => {
                 index_shift
                     .add_or_update(
                         &[MeiliShift {
@@ -329,7 +329,7 @@ impl Execute<ScheduleEvent> for Client {
                     )
                     .await?
             }
-            ScheduleEvent::ShiftStatusChanged { shift_id, status } => {
+            ScheduleEvent::ScheduleShiftStatusChanged { shift_id, status } => {
                 index_shift
                     .add_or_update(
                         &[MeiliShift {
@@ -341,7 +341,7 @@ impl Execute<ScheduleEvent> for Client {
                     )
                     .await?
             }
-            ScheduleEvent::ShiftsDeleted { shift_ids } => {
+            ScheduleEvent::ScheduleShiftsDeleted { shift_ids } => {
                 index_shift.delete_documents(&shift_ids).await?
             }
         };
