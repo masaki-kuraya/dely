@@ -1,5 +1,6 @@
 [workspace]
 members = ["dely_*"]
+exclude = ["dely_app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,7 +14,7 @@ axum-server = { version = "0.3", features = ["tls-rustls"] }
 base64 = "0.21.0"
 bio = "1.1.0"
 bytes = { version = "1.4.0", features = ["serde"] }
-chrono = "0.4.23"
+chrono = "0.4.24"
 config = "0.13.3"
 derive_more = "0.99.17"
 eventstore = "2.2.0"

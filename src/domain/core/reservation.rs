@@ -1,12 +1,12 @@
 use std::ops::Range;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use derive_more::{Deref, Display, Error, From, IntoIterator};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{Aggregation, DataAccessError, Entity, Event, EventQueue, Id};
 
-use super::{CustomerId, Price, ProstituteId};
+use super::{CustomerId, ProstituteId, Money};
 
 /// 予約リポジトリ
 #[async_trait::async_trait]
@@ -38,6 +38,11 @@ pub enum ReservationEvent {
         prostitute_ids: Vec<ProstituteId>,
         time: Range<DateTime<Utc>>,
         customer: ReservationCustomer,
+    },
+    /// 予約の時間が変更された
+    ReservationTimeExtended {
+        id: ReservationId,
+        second: i64,
     },
     /// 予約の詳細が追加された
     ReservationDetailAdded {
@@ -92,6 +97,14 @@ impl Reservation {
             customer,
         });
         Ok(entity)
+    }
+
+    pub fn extend_time(&mut self, duration: Duration) -> Result<(), ReservationError> {
+        self.validate_time_extended(&duration)?;
+        self.time = self.time.start..(self.time.end + duration);
+        self.events
+            .push(ReservationEvent::ReservationTimeExtended { id: self.id, second: duration.num_seconds() });
+        Ok(())
     }
 
     pub fn add_detail(&mut self, detail: ReservationDetail) -> Result<(), ReservationError> {
@@ -149,6 +162,13 @@ impl Reservation {
         Self::validate_prostitute_ids(prostitute_ids)?;
         Self::validate_time(time)?;
         Self::validate_customer(customer)?;
+        Ok(())
+    }
+
+    fn validate_time_extended(&self, duration: &Duration) -> Result<(), ReservationError> {
+        if *duration <= Duration::zero() {
+            return Err(ReservationError::InvalidDuration);
+        }
         Ok(())
     }
 
@@ -224,6 +244,10 @@ impl Aggregation for Reservation {
             } => {
                 Self::validate_created(prostitute_ids, time, customer)?;
             }
+            ReservationEvent::ReservationTimeExtended { id, second } => {
+                self.validate_id(id)?;
+                self.validate_time_extended(&Duration::seconds(*second))?;
+            }
             ReservationEvent::ReservationDetailAdded { id, detail } => {
                 self.validate_id(id)?;
                 self.validate_detail_added(detail)?;
@@ -251,6 +275,11 @@ impl Aggregation for Reservation {
                     if let Ok(ebtity) = Self::create(id, prostitute_ids, time, customer) {
                         *self = ebtity;
                     }
+                }
+            }
+            ReservationEvent::ReservationTimeExtended { id, second } => {
+                if self.id == id {
+                    if let Err(_) = self.extend_time(Duration::seconds(second)) {};
                 }
             }
             ReservationEvent::ReservationDetailAdded { id, detail } => {
@@ -300,6 +329,9 @@ pub enum ReservationError {
     /// 時間が不正です
     #[display(fmt = "Invalid time")]
     InvalidTime,
+    /// 期間が不正です
+    #[display(fmt = "Invalid duration")]
+    InvalidDuration,
     /// 匿名の予約はできません
     #[display(fmt = "Anonymous reservation is not allowed")]
     AnonymousNotAllowed,
@@ -348,7 +380,7 @@ pub struct ReservationDetail {
     id: ReservationDetailId,
     name: String,
     quantity: u32,
-    price: Price,
+    price: Money,
 }
 
 impl ReservationDetail {
@@ -356,7 +388,7 @@ impl ReservationDetail {
         id: ReservationDetailId,
         name: String,
         quantity: u32,
-        price: Price,
+        price: Money,
     ) -> Result<Self, ReservationDetailError> {
         Self::validate_created(&name, quantity, &price)?;
         Ok(ReservationDetail {
@@ -371,14 +403,14 @@ impl ReservationDetail {
         &self.name
     }
 
-    pub fn price(&self) -> &Price {
+    pub fn price(&self) -> &Money {
         &self.price
     }
 
     fn validate_created(
         name: &str,
         quantity: u32,
-        _price: &Price,
+        _price: &Money,
     ) -> Result<(), ReservationDetailError> {
         Self::validate_name(name)?;
         Self::validate_quantity(quantity)?;

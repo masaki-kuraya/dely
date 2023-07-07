@@ -63,6 +63,16 @@ impl Money {
     pub fn new(amount: i64, currency: Currency) -> Money {
         Money { amount, currency }
     }
+
+    /// `self`が負数である場合は`true`、`0`または正数の場合は`false`を返します。
+    pub fn is_positive(&self) -> bool {
+        self.amount.is_positive()
+    }
+
+    /// `self`が負数である場合は`true`、`0`または正数の場合は`false`を返します。
+    pub fn is_negative(&self) -> bool {
+        self.amount.is_negative()
+    }
 }
 
 impl fmt::Display for Money {
@@ -101,5 +111,15 @@ pub struct Price {
 impl Price {
     pub fn new(amount: Money, unit: PriceUnit) -> Price {
         Price { amount, unit }
+    }
+
+    /// `self`が負数である場合は`true`、`0`または正数の場合は`false`を返します。
+    pub fn is_positive(&self) -> bool {
+        self.amount.is_positive()
+    }
+
+    /// `self`が負数である場合は`true`、`0`または正数の場合は`false`を返します。
+    pub fn is_negative(&self) -> bool {
+        self.amount.is_negative()
     }
 }
